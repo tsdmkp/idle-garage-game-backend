@@ -1,0 +1,19 @@
+{
+  "name": "game-backend",
+  "version": "1.0.0",
+  "description": "Backend for Idle Garage Game",
+  "main": "server.js",   
+  "scripts": {
+    "start": "node server.js", 
+    "dev": "node server.js"   
+  },
+  "keywords": [],
+  "author": "Your Name/Company",
+  "license": "ISC",
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^16.5.0",
+    "express": "^4.19.2",  
+    "pg": "^8.11.5"       
+  }
+}
