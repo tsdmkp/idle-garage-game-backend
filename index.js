@@ -4,6 +4,7 @@ const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 
+// Инициализация Express
 const app = express();
 app.use(express.json());
 app.use(cors({
@@ -103,7 +104,7 @@ app.patch('/game_state', async (req, res) => {
     const updates = req.body;
     try {
         console.log('Updating game state for userId:', userId);
-        console.log('Received updates:', updates);
+        console.log('Received updates:', JSON.stringify(updates, null, 2));
         const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
         const userData = result.rows[0];
 
@@ -111,19 +112,40 @@ app.patch('/game_state', async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
+        // Улучшенная нормализация JSON
+        const normalizeJson = (data) => {
+            if (data === undefined || data === null) {
+                console.warn('Data is undefined/null, returning null');
+                return null;
+            }
+            if (typeof data === 'string') {
+                try {
+                    const cleanedData = data
+                        .replace(/\\"/g, '"') // Удаляем экранирование кавычек
+                        .replace(/\\+/g, '\\') // Корректируем обратные слэши
+                        .replace(/}\s*}/g, '}'); // Удаляем лишние закрывающие скобки
+                    return JSON.parse(cleanedData);
+                } catch (e) {
+                    console.error('Failed to parse JSON:', data, e);
+                    throw new Error(`Invalid JSON format: ${data}`);
+                }
+            }
+            return JSON.parse(JSON.stringify(data)); // Гарантируем валидный JSON
+        };
+
         const updatedData = {
             ...userData,
             ...updates,
-            buildings: updates.buildings || userData.buildings,
-            player_cars: updates.player_cars || userData.player_cars,
-            hired_staff: updates.hired_staff || userData.hired_staff,
+            buildings: normalizeJson(updates.buildings) || userData.buildings,
+            player_cars: normalizeJson(updates.player_cars) || userData.player_cars,
+            hired_staff: normalizeJson(updates.hired_staff) || userData.hired_staff,
             selected_car_id: updates.selected_car_id || userData.selected_car_id,
             last_collected_time: updates.last_collected_time || userData.last_collected_time,
             first_name: updates.first_name || userData.first_name,
-            income_rate_per_hour: updates.income_rate_per_hour || userData.income_rate_per_hour
+            income_rate_per_hour: parseInt(updates.income_rate_per_hour) || userData.income_rate_per_hour // Преобразуем в число
         };
 
-        console.log('Updating with:', updatedData);
+        console.log('Updating with:', JSON.stringify(updatedData, null, 2));
 
         await pool.query(
             'UPDATE users SET player_level = $1, first_name = $2, game_coins = $3, jet_coins = $4, current_xp = $5, xp_to_next_level = $6, last_collected_time = $7, buildings = $8, hired_staff = $9, player_cars = $10, selected_car_id = $11, income_rate_per_hour = $12 WHERE user_id = $13',
@@ -144,10 +166,11 @@ app.patch('/game_state', async (req, res) => {
             ]
         );
 
-        console.log(`Updated user state for ${userId}:`, updatedData);
+        console.log(`Updated user state for ${userId}:`, JSON.stringify(updatedData, null, 2));
         res.json(updatedData);
     } catch (err) {
-        console.error('Error updating game state:', err);
+        console.error('Error updating game state:', err.message);
+        console.error('Stack trace:', err.stack);
         res.status(500).json({ message: 'Server error', error: err.message });
     }
 });
