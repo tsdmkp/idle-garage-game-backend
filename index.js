@@ -97,7 +97,19 @@ app.get('/game_state', async (req, res) => {
 });
 
 app.patch('/game_state', async (req, res) => {
-    const userId = req.body.userId || req.query.userId || 'default';
+  app.get('/leaderboard', async (req, res) => {
+    const userId = req.query.userId || 'default';
+    try {
+        console.log('Fetching leaderboard for userId:', userId);
+        const result = await pool.query('SELECT user_id, first_name, game_coins, current_xp FROM users ORDER BY game_coins DESC LIMIT 10');
+        console.log('Leaderboard result:', result.rows);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching leaderboard:', err);
+        res.status(500).json({ message: 'Server error', error: err.message });
+    }
+});  
+  const userId = req.body.userId || req.query.userId || 'default';
     const updates = req.body;
     try {
         console.log('Updating game state for userId:', userId);
