@@ -67,10 +67,11 @@ app.get('/game_state', async (req, res) => {
                         }
                     }
                 ],
-                selected_car_id: 'car_001'
+                selected_car_id: 'car_001',
+                income_rate_per_hour: 25
             };
             await pool.query(
-                'INSERT INTO users (user_id, player_level, first_name, game_coins, jet_coins, current_xp, xp_to_next_level, last_collected_time, buildings, hired_staff, player_cars, selected_car_id) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)',
+                'INSERT INTO users (user_id, player_level, first_name, game_coins, jet_coins, current_xp, xp_to_next_level, last_collected_time, buildings, hired_staff, player_cars, selected_car_id, income_rate_per_hour) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)',
                 [
                     defaultData.user_id,
                     defaultData.player_level,
@@ -83,7 +84,8 @@ app.get('/game_state', async (req, res) => {
                     defaultData.buildings,
                     defaultData.hired_staff,
                     defaultData.player_cars,
-                    defaultData.selected_car_id
+                    defaultData.selected_car_id,
+                    defaultData.income_rate_per_hour
                 ]
             );
             userData = defaultData;
@@ -97,22 +99,11 @@ app.get('/game_state', async (req, res) => {
 });
 
 app.patch('/game_state', async (req, res) => {
-  app.get('/leaderboard', async (req, res) => {
-    const userId = req.query.userId || 'default';
-    try {
-        console.log('Fetching leaderboard for userId:', userId);
-        const result = await pool.query('SELECT user_id, first_name, game_coins, current_xp FROM users ORDER BY game_coins DESC LIMIT 10');
-        console.log('Leaderboard result:', result.rows);
-        res.json(result.rows);
-    } catch (err) {
-        console.error('Error fetching leaderboard:', err);
-        res.status(500).json({ message: 'Server error', error: err.message });
-    }
-});  
-  const userId = req.body.userId || req.query.userId || 'default';
+    const userId = req.body.userId || req.query.userId || 'default';
     const updates = req.body;
     try {
         console.log('Updating game state for userId:', userId);
+        console.log('Received updates:', updates);
         const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
         const userData = result.rows[0];
 
@@ -128,11 +119,14 @@ app.patch('/game_state', async (req, res) => {
             hired_staff: updates.hired_staff || userData.hired_staff,
             selected_car_id: updates.selected_car_id || userData.selected_car_id,
             last_collected_time: updates.last_collected_time || userData.last_collected_time,
-            first_name: updates.first_name || userData.first_name
+            first_name: updates.first_name || userData.first_name,
+            income_rate_per_hour: updates.income_rate_per_hour || userData.income_rate_per_hour
         };
 
+        console.log('Updating with:', updatedData);
+
         await pool.query(
-            'UPDATE users SET player_level = $1, first_name = $2, game_coins = $3, jet_coins = $4, current_xp = $5, xp_to_next_level = $6, last_collected_time = $7, buildings = $8, hired_staff = $9, player_cars = $10, selected_car_id = $11 WHERE user_id = $12',
+            'UPDATE users SET player_level = $1, first_name = $2, game_coins = $3, jet_coins = $4, current_xp = $5, xp_to_next_level = $6, last_collected_time = $7, buildings = $8, hired_staff = $9, player_cars = $10, selected_car_id = $11, income_rate_per_hour = $12 WHERE user_id = $13',
             [
                 updatedData.player_level,
                 updatedData.first_name,
@@ -145,6 +139,7 @@ app.patch('/game_state', async (req, res) => {
                 updatedData.hired_staff,
                 updatedData.player_cars,
                 updatedData.selected_car_id,
+                updatedData.income_rate_per_hour,
                 userId
             ]
         );
@@ -153,6 +148,19 @@ app.patch('/game_state', async (req, res) => {
         res.json(updatedData);
     } catch (err) {
         console.error('Error updating game state:', err);
+        res.status(500).json({ message: 'Server error', error: err.message });
+    }
+});
+
+app.get('/leaderboard', async (req, res) => {
+    const userId = req.query.userId || 'default';
+    try {
+        console.log('Fetching leaderboard for userId:', userId);
+        const result = await pool.query('SELECT user_id, first_name, game_coins, current_xp FROM users ORDER BY game_coins DESC LIMIT 10');
+        console.log('Leaderboard result:', result.rows);
+        res.json(result.rows);
+    } catch (err) {
+        console.error('Error fetching leaderboard:', err);
         res.status(500).json({ message: 'Server error', error: err.message });
     }
 });
