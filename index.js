@@ -82,15 +82,26 @@ app.get('/game_state', async (req, res) => {
                     defaultData.current_xp,
                     defaultData.xp_to_next_level,
                     defaultData.last_collected_time,
-                    defaultData.buildings,
-                    defaultData.hired_staff,
-                    defaultData.player_cars,
+                    JSON.stringify(defaultData.buildings),
+                    JSON.stringify(defaultData.hired_staff),
+                    JSON.stringify(defaultData.player_cars),
                     defaultData.selected_car_id,
                     defaultData.income_rate_per_hour
                 ]
             );
             userData = defaultData;
             console.log('Inserted default data:', userData);
+        } else {
+            // Проверяем, если данные уже объект/массив, не парсим повторно
+            if (typeof userData.buildings === 'string') {
+                userData.buildings = JSON.parse(userData.buildings);
+            }
+            if (typeof userData.hired_staff === 'string') {
+                userData.hired_staff = JSON.parse(userData.hired_staff);
+            }
+            if (typeof userData.player_cars === 'string') {
+                userData.player_cars = JSON.parse(userData.player_cars);
+            }
         }
         res.json(userData);
     } catch (err) {
@@ -112,7 +123,18 @@ app.patch('/game_state', async (req, res) => {
             return res.status(404).json({ message: 'User not found' });
         }
 
-        // Улучшенная нормализация JSON
+        // Проверяем, если данные уже объект/массив, не парсим повторно
+        if (typeof userData.buildings === 'string') {
+            userData.buildings = JSON.parse(userData.buildings);
+        }
+        if (typeof userData.hired_staff === 'string') {
+            userData.hired_staff = JSON.parse(userData.hired_staff);
+        }
+        if (typeof userData.player_cars === 'string') {
+            userData.player_cars = JSON.parse(userData.player_cars);
+        }
+
+        // Упрощённая нормализация JSON
         const normalizeJson = (data) => {
             if (data === undefined || data === null) {
                 console.warn('Data is undefined/null, returning null');
@@ -120,17 +142,13 @@ app.patch('/game_state', async (req, res) => {
             }
             if (typeof data === 'string') {
                 try {
-                    const cleanedData = data
-                        .replace(/\\"/g, '"') // Удаляем экранирование кавычек
-                        .replace(/\\+/g, '\\') // Корректируем обратные слэши
-                        .replace(/}\s*}/g, '}'); // Удаляем лишние закрывающие скобки
-                    return JSON.parse(cleanedData);
+                    return JSON.parse(data);
                 } catch (e) {
-                    console.error('Failed to parse JSON:', data, e);
-                    throw new Error(`Invalid JSON format: ${data}`);
+                    console.error('Failed to parse JSON string:', data, e);
+                    return null;
                 }
             }
-            return JSON.parse(JSON.stringify(data)); // Гарантируем валидный JSON
+            return data;
         };
 
         const updatedData = {
@@ -142,32 +160,51 @@ app.patch('/game_state', async (req, res) => {
             selected_car_id: updates.selected_car_id || userData.selected_car_id,
             last_collected_time: updates.last_collected_time || userData.last_collected_time,
             first_name: updates.first_name || userData.first_name,
-            income_rate_per_hour: parseInt(updates.income_rate_per_hour) || userData.income_rate_per_hour // Преобразуем в число
+            income_rate_per_hour: parseInt(updates.income_rate_per_hour) || userData.income_rate_per_hour
         };
 
-        console.log('Updating with:', JSON.stringify(updatedData, null, 2));
+        // Преобразуем JSON-поля в строки перед передачей в PostgreSQL
+        const safeUpdateData = {
+            ...updatedData,
+            buildings: JSON.stringify(updatedData.buildings),
+            player_cars: JSON.stringify(updatedData.player_cars),
+            hired_staff: JSON.stringify(updatedData.hired_staff)
+        };
+
+        console.log('Updating with:', JSON.stringify(safeUpdateData, null, 2));
 
         await pool.query(
             'UPDATE users SET player_level = $1, first_name = $2, game_coins = $3, jet_coins = $4, current_xp = $5, xp_to_next_level = $6, last_collected_time = $7, buildings = $8, hired_staff = $9, player_cars = $10, selected_car_id = $11, income_rate_per_hour = $12 WHERE user_id = $13',
             [
-                updatedData.player_level,
-                updatedData.first_name,
-                updatedData.game_coins,
-                updatedData.jet_coins,
-                updatedData.current_xp,
-                updatedData.xp_to_next_level,
-                updatedData.last_collected_time,
-                updatedData.buildings,
-                updatedData.hired_staff,
-                updatedData.player_cars,
-                updatedData.selected_car_id,
-                updatedData.income_rate_per_hour,
+                safeUpdateData.player_level,
+                safeUpdateData.first_name,
+                safeUpdateData.game_coins,
+                safeUpdateData.jet_coins,
+                safeUpdateData.current_xp,
+                safeUpdateData.xp_to_next_level,
+                safeUpdateData.last_collected_time,
+                safeUpdateData.buildings,
+                safeUpdateData.hired_staff,
+                safeUpdateData.player_cars,
+                safeUpdateData.selected_car_id,
+                safeUpdateData.income_rate_per_hour,
                 userId
             ]
         );
 
-        console.log(`Updated user state for ${userId}:`, JSON.stringify(updatedData, null, 2));
-        res.json(updatedData);
+        // Проверяем, если данные уже объект/массив, не парсим повторно
+        if (typeof safeUpdateData.buildings === 'string') {
+            safeUpdateData.buildings = JSON.parse(safeUpdateData.buildings);
+        }
+        if (typeof safeUpdateData.hired_staff === 'string') {
+            safeUpdateData.hired_staff = JSON.parse(safeUpdateData.hired_staff);
+        }
+        if (typeof safeUpdateData.player_cars === 'string') {
+            safeUpdateData.player_cars = JSON.parse(safeUpdateData.player_cars);
+        }
+
+        console.log(`Updated user state for ${userId}:`, JSON.stringify(safeUpdateData, null, 2));
+        res.json(safeUpdateData);
     } catch (err) {
         console.error('Error updating game state:', err.message);
         console.error('Stack trace:', err.stack);
