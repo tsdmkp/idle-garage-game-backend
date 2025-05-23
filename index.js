@@ -7,13 +7,12 @@ require('dotenv').config();
   const app = express();
   app.use(express.json());
   app.use(cors({
-      origin: '*',
+      origin: 'https://idle-garage-game-git-restore-pre-name-button-tsdmkps-projects.vercel.app',
       methods: ['GET', 'POST', 'PUT', 'PATCH'],
       allowedHeaders: ['Content-Type', 'X-Telegram-Init-Data'],
       credentials: true
   }));
 
-  // Добавляем middleware для отладки входящих запросов
   app.use((req, res, next) => {
       console.log(`[${new Date().toISOString()}] Received request: ${req.method} ${req.url}`);
       console.log('Headers:', req.headers);
