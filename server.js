@@ -1,228 +1,168 @@
-require('dotenv').config(); // Для загрузки переменных окружения из .env
-
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
+require('dotenv').config();
 
 const app = express();
-// Render предоставляет свой порт через process.env.PORT
-const port = process.env.PORT || 3000; 
+const port = process.env.PORT || 3000;
 
-// --- НАСТРОЙКА CORS ---
-// Важно: на продакшене лучше указывать конкретные домены фронтенда.
-// Пока оставляем '*' как вы просили, но имейте в виду, это небезопасно для реальных приложений.
+// Проверка переменных окружения
+console.log('Environment variables:');
+console.log('DATABASE_URL:', process.env.DATABASE_URL ? '[DATABASE_URL configured]' : 'undefined');
+
+// Настройка PostgreSQL через CONNECTION_STRING
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: false, // Отключаем SSL для вашего хостинга
+  max: 20, // Максимальное количество соединений
+  idleTimeoutMillis: 30000, // Время простоя соединения
+  connectionTimeoutMillis: 5000 // Таймаут подключения
+});
+
+// Проверка подключения к базе
+pool.connect((err, client, release) => {
+  if (err) {
+    console.error('Error acquiring client', err.stack);
+  } else {
+    console.log('Connected to PostgreSQL as:', client.user);
+    release(); // Освобождаем клиент обратно в пул
+  }
+});
+
+// Middleware
+app.use(express.json());
 app.use(cors({
-  origin: '*', 
-  methods: ['GET', 'POST', 'PUT', 'PATCH'], // Убедитесь, что все необходимые методы здесь
-  allowedHeaders: ['Content-Type', 'X-Telegram-Init-Data'], // Убедитесь, что заголовки, которые отправляет фронтенд, разрешены
-  credentials: true // Важно, если используете куки или сессии
+  origin: '*', // Разрешить запросы от любого источника
+  methods: ['GET', 'POST', 'PUT', 'PATCH'],
+  allowedHeaders: ['Content-Type', 'X-Telegram-Init-Data'],
+  credentials: true
 }));
 
-// Middleware для парсинга JSON-тела запросов
-app.use(express.json());
-
-// --- НАСТРОЙКА PostgreSQL ---
-// Проверка переменных окружения (для отладки)
-console.log('Environment variables:');
-console.log('DB_USER:', process.env.DB_USER);
-console.log('DB_HOST:', process.env.DB_HOST);
-console.log('DB_NAME:', process.env.DB_NAME);
-console.log('DB_PORT:', process.env.DB_PORT);
-console.log('DB_PASSWORD:', process.env.DB_PASSWORD ? '[hidden]' : 'undefined');
-console.log('DATABASE_URL:', process.env.DATABASE_URL ? '[hidden]' : 'undefined');
-
-// Выбираем способ подключения к БД.
-// Приоритет отдаем DATABASE_URL, так как Render обычно предоставляет его.
-// Если DATABASE_URL нет, используем отдельные переменные (user, host и т.д.)
-const dbConfig = process.env.DATABASE_URL ? 
-  { connectionString: process.env.DATABASE_URL, ssl: { rejectUnauthorized: false } } :
-  {
-    user: process.env.DB_USER,
-    host: process.env.DB_HOST,
-    database: process.env.DB_NAME,
-    password: process.env.DB_PASSWORD,
-    port: process.env.DB_PORT || 5432,
-    ssl: { rejectUnauthorized: false } // Требуется для Render
-  };
-
-const pool = new Pool(dbConfig);
-
-// Проверка подключения к базе данных при старте
-pool.connect()
-  .then(() => console.log('Successfully connected to database'))
-  .catch(err => console.error('Failed to connect to database:', err.message));
-
-// --- МАРШРУТЫ API ---
-
-// Маршрут для получения состояния игры
-app.get('/game_state', async (req, res) => {
-  const userId = req.query.userId; // user_id обязателен
-  if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
+// Инициализация таблицы при старте
+const initializeDatabase = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(50) UNIQUE NOT NULL,
+        first_name VARCHAR(100),
+        username VARCHAR(100),
+        player_level INTEGER DEFAULT 1,
+        game_coins BIGINT DEFAULT 100000,
+        jet_coins INTEGER DEFAULT 0,
+        current_xp INTEGER DEFAULT 10,
+        xp_to_next_level INTEGER DEFAULT 100,
+        last_collected_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        buildings JSONB DEFAULT '[]',
+        player_cars JSONB DEFAULT '[]',
+        selected_car_id VARCHAR(50),
+        hired_staff JSONB DEFAULT '{}',
+        income_rate_per_hour INTEGER DEFAULT 0,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    console.log('Database table initialized successfully');
+  } catch (err) {
+    console.error('Error initializing database:', err);
   }
+};
 
+// Эндпоинт для получения состояния игры
+app.get('/api/game_state', async (req, res) => {
+  const userId = req.query.userId || 'default';
+  
   try {
     const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
-    let userData = result.rows[0];
-
-    if (!userData) {
-      console.log(`No user found for ${userId}, creating default data`);
-      // Создаем нового пользователя с дефолтными данными
-      const defaultData = {
-        user_id: userId,
-        player_level: 1,
-        first_name: req.query.first_name || 'Игрок', // Получаем имя из запроса, если есть
-        game_coins: 100,
-        jet_coins: 0,
-        current_xp: 0,
-        xp_to_next_level: 100,
-        income_rate_per_hour: 25, // Начальный доход
-        last_collected_time: Date.now(),
-        buildings: JSON.stringify([{ name: 'garage', level: 1, isLocked: false }, { name: 'workshop', level: 0, isLocked: false }, { name: 'office', level: 0, isLocked: true }]),
-        hired_staff: JSON.stringify({ 'mechanic': 0 }),
-        player_cars: JSON.stringify([{
-            id: 'basic-car',
-            name: 'Basic Car',
-            imageUrl: 'https://via.placeholder.com/150',
-            parts: {
-                engine: { level: 1, name: 'Двигатель', type: 'engine' },
-                wheels: { level: 1, name: 'Колеса', type: 'wheels' },
-                exhaust: { level: 1, name: 'Выхлоп', type: 'exhaust' },
-            },
-            stats: { speed: 10, acceleration: 5, handling: 8, incomeBonus: 0 }
-        }]),
-        selected_car_id: 'basic-car'
-      };
-
-      await pool.query(
-        `INSERT INTO users (user_id, player_level, first_name, game_coins, jet_coins, current_xp, xp_to_next_level, income_rate_per_hour, last_collected_time, buildings, hired_staff, player_cars, selected_car_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13)`,
-        [
-          defaultData.user_id, defaultData.player_level, defaultData.first_name,
-          defaultData.game_coins, defaultData.jet_coins, defaultData.current_xp,
-          defaultData.xp_to_next_level, defaultData.income_rate_per_hour,
-          defaultData.last_collected_time, defaultData.buildings, defaultData.hired_staff,
-          defaultData.player_cars, defaultData.selected_car_id
-        ]
-      );
-      userData = defaultData; // Возвращаем созданные данные
+    
+    if (result.rows.length === 0) {
+      // Создаем нового пользователя
+      const insertResult = await pool.query(`
+        INSERT INTO users (user_id, first_name, username, player_level, game_coins, jet_coins, current_xp, xp_to_next_level, buildings, player_cars, hired_staff)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        RETURNING *
+      `, [
+        userId,
+        'Игрок',
+        null,
+        1,
+        100000,
+        0,
+        10,
+        100,
+        JSON.stringify([]),
+        JSON.stringify([]),
+        JSON.stringify({})
+      ]);
+      
+      res.status(200).json(insertResult.rows[0]);
     } else {
-      // Парсим JSONB поля
-      userData.buildings = typeof userData.buildings === 'string' ? JSON.parse(userData.buildings) : userData.buildings;
-      userData.hired_staff = typeof userData.hired_staff === 'string' ? JSON.parse(userData.hired_staff) : userData.hired_staff;
-      userData.player_cars = typeof userData.player_cars === 'string' ? JSON.parse(userData.player_cars) : userData.player_cars;
+      res.status(200).json(result.rows[0]);
     }
-
-    res.json(userData);
-  } catch (error) {
-    console.error('Error fetching game state:', error);
+  } catch (err) {
+    console.error('Error fetching game state:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-
-// Маршрут для сохранения состояния игры
-app.post('/game_state', async (req, res) => {
-  const userId = req.body.userId;
-  const updates = req.body; // Все данные, которые пришли с фронтенда
-
-  if (!userId) {
-    return res.status(400).json({ error: 'userId is required' });
-  }
-
+// Эндпоинт для обновления состояния игры
+app.post('/api/game_state', async (req, res) => {
+  const { userId, ...updateData } = req.body;
+  const finalUserId = userId || 'default';
+  
   try {
-    // Получаем текущее состояние пользователя, чтобы объединить данные
-    const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
-    let userData = result.rows[0];
-
-    if (!userData) {
-      // Если пользователя нет, создаем его с переданными данными (если они полные)
-      console.log(`User ${userId} not found during save, creating new entry.`);
-      const newUserData = {
-        user_id: userId,
-        player_level: updates.player_level || 1,
-        first_name: updates.first_name || 'Игрок',
-        game_coins: updates.game_coins || 100,
-        jet_coins: updates.jet_coins || 0,
-        current_xp: updates.current_xp || 0,
-        xp_to_next_level: updates.xp_to_next_level || 100,
-        income_rate_per_hour: updates.income_rate_per_hour || 25,
-        last_collected_time: updates.last_collected_time || Date.now(),
-        buildings: updates.buildings ? JSON.stringify(updates.buildings) : JSON.stringify([{ name: 'garage', level: 1, isLocked: false }]),
-        hired_staff: updates.hired_staff ? JSON.stringify(updates.hired_staff) : JSON.stringify({ 'mechanic': 0 }),
-        player_cars: updates.player_cars ? JSON.stringify(updates.player_cars) : JSON.stringify([{ id: 'basic-car' }]),
-        selected_car_id: updates.selected_car_id || 'basic-car'
-      };
-
-      await pool.query(
-        `INSERT INTO users (user_id, player_level, first_name, game_coins, jet_coins, current_xp, xp_to_next_level, income_rate_per_hour, last_collected_time, buildings, hired_staff, player_cars, selected_car_id)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11::jsonb, $12::jsonb, $13)`,
-        [
-          newUserData.user_id, newUserData.player_level, newUserData.first_name,
-          newUserData.game_coins, newUserData.jet_coins, newUserData.current_xp,
-          newUserData.xp_to_next_level, newUserData.income_rate_per_hour,
-          newUserData.last_collected_time, newUserData.buildings, newUserData.hired_staff,
-          newUserData.player_cars, newUserData.selected_car_id
-        ]
-      );
-    } else {
-      // Пользователь найден, обновляем его данные
-      // Объединяем полученные обновления с текущими данными из БД
-      const updatedData = {
-        player_level: updates.player_level !== undefined ? updates.player_level : userData.player_level,
-        game_coins: updates.game_coins !== undefined ? updates.game_coins : userData.game_coins,
-        jet_coins: updates.jet_coins !== undefined ? updates.jet_coins : userData.jet_coins,
-        current_xp: updates.current_xp !== undefined ? updates.current_xp : userData.current_xp,
-        xp_to_next_level: updates.xp_to_next_level !== undefined ? updates.xp_to_next_level : userData.xp_to_next_level,
-        income_rate_per_hour: updates.income_rate_per_hour !== undefined ? updates.income_rate_per_hour : userData.income_rate_per_hour,
-        last_collected_time: updates.last_collected_time !== undefined ? updates.last_collected_time : userData.last_collected_time,
-        buildings: updates.buildings !== undefined ? JSON.stringify(updates.buildings) : userData.buildings, // JSONB
-        hired_staff: updates.hired_staff !== undefined ? JSON.stringify(updates.hired_staff) : userData.hired_staff, // JSONB
-        player_cars: updates.player_cars !== undefined ? JSON.stringify(updates.player_cars) : userData.player_cars, // JSONB
-        selected_car_id: updates.selected_car_id !== undefined ? updates.selected_car_id : userData.selected_car_id,
-        first_name: updates.first_name !== undefined ? updates.first_name : userData.first_name
-      };
-
-      await pool.query(
-        'UPDATE users SET player_level = $1, first_name = $2, game_coins = $3, jet_coins = $4, current_xp = $5, xp_to_next_level = $6, last_collected_time = $7, buildings = $8::jsonb, hired_staff = $9::jsonb, player_cars = $10::jsonb, selected_car_id = $11 WHERE user_id = $12',
-        [
-          updatedData.player_level,
-          updatedData.first_name,
-          updatedData.game_coins,
-          updatedData.jet_coins,
-          updatedData.current_xp,
-          updatedData.xp_to_next_level,
-          updatedData.last_collected_time,
-          updatedData.buildings,
-          updatedData.hired_staff,
-          updatedData.player_cars,
-          updatedData.selected_car_id,
-          userId
-        ]
-      );
+    const updates = [];
+    const values = [];
+    let paramCount = 1;
+    
+    for (const [key, value] of Object.entries(updateData)) {
+      if (key !== 'userId') {
+        updates.push(`${key} = $${paramCount}`);
+        values.push(typeof value === 'object' ? JSON.stringify(value) : value);
+        paramCount++;
+      }
     }
-    console.log(`Game state saved for userId: ${userId}`);
-    res.status(200).json({ message: 'Game state saved successfully' });
-  } catch (error) {
-    console.error('Error saving game state:', error);
+    
+    if (updates.length === 0) {
+      return res.status(400).json({ error: 'No data to update' });
+    }
+    
+    updates.push(`updated_at = CURRENT_TIMESTAMP`);
+    values.push(finalUserId);
+    
+    const query = `
+      UPDATE users 
+      SET ${updates.join(', ')}
+      WHERE user_id = $${paramCount}
+      RETURNING *
+    `;
+    
+    const result = await pool.query(query, values);
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    res.status(200).json(result.rows[0]);
+  } catch (err) {
+    console.error('Error updating game state:', err);
     res.status(500).json({ error: 'Internal server error' });
   }
 });
 
-// Маршрут для получения таблицы рекордов
+// Эндпоинт для таблицы рекордов
 app.get('/leaderboard', async (req, res) => {
-  const userId = req.query.userId; // user_id текущего игрока, чтобы показать его место
+  const userId = req.query.userId || 'default';
 
   try {
-    // Проверка, существует ли колонка income_rate_per_hour
+    // Проверяем, существует ли столбец income_rate_per_hour
     const columnCheck = await pool.query(`
-      SELECT column_name FROM information_schema.columns 
+      SELECT 1 FROM information_schema.columns 
       WHERE table_name = 'users' AND column_name = 'income_rate_per_hour'
     `);
     if (columnCheck.rows.length === 0) {
       console.error('Column income_rate_per_hour does not exist in users table');
-      // В случае отсутствия колонки, возвращаем пустые данные или дефолт
-      return res.json({ topPlayers: [], currentPlayer: null, message: 'Missing income_rate_per_hour column in DB' });
+      return res.status(500).json({ error: 'Database schema error: missing income_rate_per_hour column' });
     }
 
     // Получаем топ-10 игроков
@@ -248,18 +188,20 @@ app.get('/leaderboard', async (req, res) => {
       }
     }
 
-    res.json({
-      topPlayers: topPlayersResult.rows,
-      currentPlayer: currentPlayer
+    res.status(200).json({
+      top_players: topPlayersResult.rows,
+      current_player: currentPlayer
     });
 
-  } catch (error) {
-    console.error('Error fetching leaderboard:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error('Error fetching leaderboard:', err);
+    res.status(500).json({ error: 'Failed to fetch leaderboard data' });
   }
 });
 
-// Запуск сервера
-app.listen(port, () => {
-  console.log(`Server running on port ${port}`);
+// Инициализируем базу данных и запускаем сервер
+initializeDatabase().then(() => {
+  app.listen(port, () => {
+    console.log(`Server running on port ${port}`);
+  });
 });
