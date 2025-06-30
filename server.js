@@ -271,3 +271,293 @@ initializeDatabase().then(() => {
     console.log(`🎮 Game state endpoint: /api/game_state`);
   });
 });
+
+// Добавить в server.js
+
+// Добавить в server.js
+
+// Инициализация таблиц для друзей
+const initializeFriendsDatabase = async () => {
+  try {
+    // Таблица для связей друзей
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS user_referrals (
+        id SERIAL PRIMARY KEY,
+        referrer_id VARCHAR(50) NOT NULL,
+        referred_id VARCHAR(50) NOT NULL,
+        referred_name VARCHAR(100),
+        reward_coins INTEGER DEFAULT 200,
+        claimed BOOLEAN DEFAULT FALSE,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (referrer_id) REFERENCES users(user_id),
+        FOREIGN KEY (referred_id) REFERENCES users(user_id),
+        UNIQUE(referred_id) -- Один игрок может быть приглашен только один раз
+      )
+    `);
+
+    // Добавляем поле для отслеживания кто пригласил пользователя
+    await pool.query(`
+      ALTER TABLE users 
+      ADD COLUMN IF NOT EXISTS invited_by VARCHAR(50),
+      ADD COLUMN IF NOT EXISTS referral_bonus_received BOOLEAN DEFAULT FALSE
+    `);
+
+    console.log('✅ Friends database tables initialized');
+  } catch (err) {
+    console.error('❌ Error initializing friends database:', err);
+  }
+};
+
+// Обработка нового пользователя с реферальным кодом
+const handleReferralRegistration = async (userId, firstName, referrerId) => {
+  try {
+    console.log(`👥 Processing referral: ${userId} invited by ${referrerId}`);
+    
+    // Проверяем, что реферер существует
+    const referrerCheck = await pool.query(
+      'SELECT user_id FROM users WHERE user_id = $1',
+      [referrerId]
+    );
+    
+    if (referrerCheck.rows.length === 0) {
+      console.log('❌ Referrer not found:', referrerId);
+      return false;
+    }
+    
+    // Создаем запись о реферале
+    await pool.query(`
+      INSERT INTO user_referrals (referrer_id, referred_id, referred_name)
+      VALUES ($1, $2, $3)
+      ON CONFLICT (referred_id) DO NOTHING
+    `, [referrerId, userId, firstName]);
+    
+    // Обновляем пользователя - указываем кто пригласил
+    await pool.query(`
+      UPDATE users 
+      SET invited_by = $1, game_coins = game_coins + 100
+      WHERE user_id = $2
+    `, [referrerId, userId]);
+    
+    console.log(`✅ Referral processed: ${userId} gets +100 coins, ${referrerId} gets referral credit`);
+    return true;
+    
+  } catch (err) {
+    console.error('❌ Error processing referral:', err);
+    return false;
+  }
+};
+
+// GET /api/friends - получение данных о друзьях
+app.get('/api/friends', async (req, res) => {
+  const userId = req.query.userId || 'default';
+  console.log('👥 Friends data request for:', userId);
+
+  try {
+    // Получаем список приглашенных друзей
+    const friendsResult = await pool.query(`
+      SELECT 
+        ur.referred_id as user_id,
+        ur.referred_name as first_name,
+        ur.reward_coins,
+        ur.claimed,
+        ur.created_at as joined_at
+      FROM user_referrals ur
+      WHERE ur.referrer_id = $1
+      ORDER BY ur.created_at DESC
+    `, [userId]);
+
+    // Считаем статистику
+    const statsResult = await pool.query(`
+      SELECT 
+        COUNT(*) as total_invites,
+        SUM(CASE WHEN claimed THEN reward_coins ELSE 0 END) as total_earned,
+        COUNT(CASE WHEN NOT claimed THEN 1 END) as pending_count
+      FROM user_referrals
+      WHERE referrer_id = $1
+    `, [userId]);
+
+    // Получаем неполученные награды
+    const pendingRewards = await pool.query(`
+      SELECT referred_name as friend_name, reward_coins as coins
+      FROM user_referrals
+      WHERE referrer_id = $1 AND claimed = FALSE
+    `, [userId]);
+
+    const stats = statsResult.rows[0] || { total_invites: 0, total_earned: 0, pending_count: 0 };
+    
+    res.json({
+      success: true,
+      friends: friendsResult.rows,
+      total_invites: parseInt(stats.total_invites) || 0,
+      total_earned: parseInt(stats.total_earned) || 0,
+      pending_rewards: pendingRewards.rows,
+      referral_link: `ref_${userId}`
+    });
+
+  } catch (err) {
+    console.error('❌ Error fetching friends data:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to fetch friends data'
+    });
+  }
+});
+
+// POST /api/friends/claim - получение наград за рефералы
+app.post('/api/friends/claim', async (req, res) => {
+  const { userId } = req.body;
+  console.log('🎁 Claiming referral rewards for:', userId);
+
+  try {
+    // Получаем все неполученные награды
+    const pendingRewards = await pool.query(`
+      SELECT id, reward_coins
+      FROM user_referrals
+      WHERE referrer_id = $1 AND claimed = FALSE
+    `, [userId]);
+
+    if (pendingRewards.rows.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No pending rewards',
+        total_coins: 0
+      });
+    }
+
+    // Считаем общую сумму
+    const totalCoins = pendingRewards.rows.reduce((sum, reward) => sum + reward.reward_coins, 0);
+
+    // Начинаем транзакцию
+    await pool.query('BEGIN');
+
+    try {
+      // Отмечаем награды как полученные
+      await pool.query(`
+        UPDATE user_referrals 
+        SET claimed = TRUE 
+        WHERE referrer_id = $1 AND claimed = FALSE
+      `, [userId]);
+
+      // Добавляем монеты пользователю
+      await pool.query(`
+        UPDATE users 
+        SET game_coins = game_coins + $1
+        WHERE user_id = $2
+      `, [totalCoins, userId]);
+
+      await pool.query('COMMIT');
+
+      console.log(`✅ Claimed ${totalCoins} coins for ${userId}`);
+
+      res.json({
+        success: true,
+        total_coins: totalCoins,
+        rewards_count: pendingRewards.rows.length
+      });
+
+    } catch (err) {
+      await pool.query('ROLLBACK');
+      throw err;
+    }
+
+  } catch (err) {
+    console.error('❌ Error claiming referral rewards:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to claim rewards'
+    });
+  }
+});
+
+// Модифицируем создание нового пользователя для поддержки рефералов
+const createUserWithReferral = async (userId, firstName, referrerId = null) => {
+  try {
+    // Базовые монеты
+    let startingCoins = 500;
+    
+    // Если есть реферальный код, добавляем бонус
+    if (referrerId) {
+      startingCoins += 100; // Бонус новичку
+    }
+
+    // Создаем пользователя
+    const insertResult = await pool.query(`
+      INSERT INTO users (
+        user_id, first_name, username, player_level, game_coins, jet_coins, 
+        current_xp, xp_to_next_level, buildings, player_cars, hired_staff,
+        income_rate_per_hour, has_completed_tutorial, invited_by
+      )
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      RETURNING *
+    `, [
+      userId,
+      firstName || 'Игрок',
+      null,
+      1,
+      startingCoins,
+      0,
+      10,
+      100,
+      JSON.stringify([]),
+      JSON.stringify([]),
+      JSON.stringify({}),
+      0,
+      false,
+      referrerId
+    ]);
+
+    // Если есть реферер, обрабатываем реферальную связь
+    if (referrerId) {
+      await handleReferralRegistration(userId, firstName, referrerId);
+    }
+
+    return insertResult.rows[0];
+    
+  } catch (err) {
+    console.error('❌ Error creating user with referral:', err);
+    throw err;
+  }
+};
+
+// Обновляем основной эндпоинт создания пользователя
+app.get('/api/game_state', async (req, res) => {
+  const userId = req.query.userId || 'default';
+  const referralCode = req.query.ref; // Получаем реферальный код из параметров
+  console.log('📥 GET game_state for userId:', userId, 'referral:', referralCode);
+  
+  try {
+    const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
+    
+    if (result.rows.length === 0) {
+      console.log('👤 Creating new user:', userId);
+      
+      // Извлекаем ID реферера из кода
+      let referrerId = null;
+      if (referralCode && referralCode.startsWith('ref_')) {
+        referrerId = referralCode.replace('ref_', '');
+        console.log('👥 Referral detected:', referrerId);
+      }
+      
+      const newUser = await createUserWithReferral(userId, 'Игрок', referrerId);
+      res.status(200).json(newUser);
+    } else {
+      console.log('📦 Found existing user:', userId);
+      res.status(200).json(result.rows[0]);
+    }
+  } catch (err) {
+    console.error('❌ Error fetching game state:', err);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
+
+// Инициализируем друзей при запуске
+initializeDatabase().then(() => {
+  return initializeFriendsDatabase();
+}).then(() => {
+  app.listen(port, () => {
+    console.log(`🚀 Server running on port ${port}`);
+    console.log(`👥 Friends system enabled`);
+    console.log(`📊 Leaderboard endpoint: /api/leaderboard`);
+    console.log(`🎮 Game state endpoint: /api/game_state`);
+  });
+});
