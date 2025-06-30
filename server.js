@@ -83,28 +83,40 @@ const initializeDatabase = async () => {
 // Эндпоинт для получения состояния игры
 app.get('/api/game_state', async (req, res) => {
   const userId = req.query.userId || 'default';
-  console.log('📥 GET game_state for userId:', userId);
+  const referralCode = req.query.ref; // Получаем реферальный код
+  console.log('📥 GET game_state for userId:', userId, 'referral:', referralCode);
   
   try {
     const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
     
     if (result.rows.length === 0) {
       console.log('👤 Creating new user:', userId);
+      
+      // Извлекаем ID реферера из кода
+      let referrerId = null;
+      let startingCoins = 500;
+      
+      if (referralCode && referralCode.startsWith('ref_')) {
+        referrerId = referralCode.replace('ref_', '');
+        startingCoins += 100; // Бонус новичку
+        console.log('👥 Referral detected:', referrerId, 'bonus coins:', startingCoins);
+      }
+      
       // Создаем нового пользователя
       const insertResult = await pool.query(`
         INSERT INTO users (
           user_id, first_name, username, player_level, game_coins, jet_coins, 
           current_xp, xp_to_next_level, buildings, player_cars, hired_staff,
-          income_rate_per_hour, has_completed_tutorial
+          income_rate_per_hour, has_completed_tutorial, invited_by
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
         RETURNING *
       `, [
         userId,
         'Игрок',
         null,
         1,
-        500, // STARTING_COINS
+        startingCoins,
         0,
         10,
         100,
@@ -112,8 +124,14 @@ app.get('/api/game_state', async (req, res) => {
         JSON.stringify([]),
         JSON.stringify({}),
         0,
-        false
+        false,
+        referrerId
       ]);
+      
+      // Если есть реферер, обрабатываем реферальную связь
+      if (referrerId) {
+        await handleReferralRegistration(userId, 'Игрок', referrerId);
+      }
       
       res.status(200).json(insertResult.rows[0]);
     } else {
@@ -265,16 +283,35 @@ app.get('/leaderboard', async (req, res) => {
 
 // Инициализируем базу данных и запускаем сервер
 initializeDatabase().then(() => {
-  app.listen(port, () => {
+  return initializeFriendsDatabase();
+}).then(() => {
+  const server = app.listen(port, () => {
     console.log(`🚀 Server running on port ${port}`);
+    console.log(`👥 Friends system enabled`);
     console.log(`📊 Leaderboard endpoint: /api/leaderboard`);
     console.log(`🎮 Game state endpoint: /api/game_state`);
+    console.log(`🤝 Friends endpoint: /api/friends`);
   });
+  
+  // Обработка ошибки занятого порта
+  server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+      console.log(`❌ Port ${port} is busy, trying ${port + 1}...`);
+      setTimeout(() => {
+        server.close();
+        app.listen(port + 1, () => {
+          console.log(`🚀 Server running on port ${port + 1}`);
+        });
+      }, 1000);
+    } else {
+      console.error('❌ Server error:', err);
+    }
+  });
+}).catch(err => {
+  console.error('❌ Failed to initialize database:', err);
 });
 
-// Добавить в server.js
-
-// Добавить в server.js
+// === СИСТЕМА ДРУЗЕЙ ===
 
 // Инициализация таблиц для друзей
 const initializeFriendsDatabase = async () => {
@@ -289,18 +326,18 @@ const initializeFriendsDatabase = async () => {
         reward_coins INTEGER DEFAULT 200,
         claimed BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-        FOREIGN KEY (referrer_id) REFERENCES users(user_id),
-        FOREIGN KEY (referred_id) REFERENCES users(user_id),
-        UNIQUE(referred_id) -- Один игрок может быть приглашен только один раз
+        UNIQUE(referred_id)
       )
     `);
 
-    // Добавляем поле для отслеживания кто пригласил пользователя
-    await pool.query(`
-      ALTER TABLE users 
-      ADD COLUMN IF NOT EXISTS invited_by VARCHAR(50),
-      ADD COLUMN IF NOT EXISTS referral_bonus_received BOOLEAN DEFAULT FALSE
-    `);
+    // Добавляем поля для отслеживания рефералов
+    try {
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by VARCHAR(50)`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_bonus_received BOOLEAN DEFAULT FALSE`);
+      console.log('✅ Friends database columns updated');
+    } catch (alterErr) {
+      console.log('ℹ️ Friends columns already exist or update failed:', alterErr.message);
+    }
 
     console.log('✅ Friends database tables initialized');
   } catch (err) {
@@ -330,13 +367,6 @@ const handleReferralRegistration = async (userId, firstName, referrerId) => {
       VALUES ($1, $2, $3)
       ON CONFLICT (referred_id) DO NOTHING
     `, [referrerId, userId, firstName]);
-    
-    // Обновляем пользователя - указываем кто пригласил
-    await pool.query(`
-      UPDATE users 
-      SET invited_by = $1, game_coins = game_coins + 100
-      WHERE user_id = $2
-    `, [referrerId, userId]);
     
     console.log(`✅ Referral processed: ${userId} gets +100 coins, ${referrerId} gets referral credit`);
     return true;
@@ -467,97 +497,4 @@ app.post('/api/friends/claim', async (req, res) => {
       error: 'Failed to claim rewards'
     });
   }
-});
-
-// Модифицируем создание нового пользователя для поддержки рефералов
-const createUserWithReferral = async (userId, firstName, referrerId = null) => {
-  try {
-    // Базовые монеты
-    let startingCoins = 500;
-    
-    // Если есть реферальный код, добавляем бонус
-    if (referrerId) {
-      startingCoins += 100; // Бонус новичку
-    }
-
-    // Создаем пользователя
-    const insertResult = await pool.query(`
-      INSERT INTO users (
-        user_id, first_name, username, player_level, game_coins, jet_coins, 
-        current_xp, xp_to_next_level, buildings, player_cars, hired_staff,
-        income_rate_per_hour, has_completed_tutorial, invited_by
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
-      RETURNING *
-    `, [
-      userId,
-      firstName || 'Игрок',
-      null,
-      1,
-      startingCoins,
-      0,
-      10,
-      100,
-      JSON.stringify([]),
-      JSON.stringify([]),
-      JSON.stringify({}),
-      0,
-      false,
-      referrerId
-    ]);
-
-    // Если есть реферер, обрабатываем реферальную связь
-    if (referrerId) {
-      await handleReferralRegistration(userId, firstName, referrerId);
-    }
-
-    return insertResult.rows[0];
-    
-  } catch (err) {
-    console.error('❌ Error creating user with referral:', err);
-    throw err;
-  }
-};
-
-// Обновляем основной эндпоинт создания пользователя
-app.get('/api/game_state', async (req, res) => {
-  const userId = req.query.userId || 'default';
-  const referralCode = req.query.ref; // Получаем реферальный код из параметров
-  console.log('📥 GET game_state for userId:', userId, 'referral:', referralCode);
-  
-  try {
-    const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
-    
-    if (result.rows.length === 0) {
-      console.log('👤 Creating new user:', userId);
-      
-      // Извлекаем ID реферера из кода
-      let referrerId = null;
-      if (referralCode && referralCode.startsWith('ref_')) {
-        referrerId = referralCode.replace('ref_', '');
-        console.log('👥 Referral detected:', referrerId);
-      }
-      
-      const newUser = await createUserWithReferral(userId, 'Игрок', referrerId);
-      res.status(200).json(newUser);
-    } else {
-      console.log('📦 Found existing user:', userId);
-      res.status(200).json(result.rows[0]);
-    }
-  } catch (err) {
-    console.error('❌ Error fetching game state:', err);
-    res.status(500).json({ error: 'Internal server error' });
-  }
-});
-
-// Инициализируем друзей при запуске
-initializeDatabase().then(() => {
-  return initializeFriendsDatabase();
-}).then(() => {
-  app.listen(port, () => {
-    console.log(`🚀 Server running on port ${port}`);
-    console.log(`👥 Friends system enabled`);
-    console.log(`📊 Leaderboard endpoint: /api/leaderboard`);
-    console.log(`🎮 Game state endpoint: /api/game_state`);
-  });
 });
