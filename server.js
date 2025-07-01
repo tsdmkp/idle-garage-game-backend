@@ -102,7 +102,8 @@ app.get('/api/game_state', async (req, res) => {
         console.log('👥 Referral detected:', referrerId, 'bonus coins:', startingCoins);
       }
       
-      // Создаем нового пользователя
+      // Создаем нового пользователя  
+      const firstName = 'Игрок'; // По умолчанию, может быть передано из фронтенда
       const insertResult = await pool.query(`
         INSERT INTO users (
           user_id, first_name, username, player_level, game_coins, jet_coins, 
@@ -113,7 +114,7 @@ app.get('/api/game_state', async (req, res) => {
         RETURNING *
       `, [
         userId,
-        'Игрок',
+        firstName,
         null,
         1,
         startingCoins,
@@ -130,7 +131,24 @@ app.get('/api/game_state', async (req, res) => {
       
       // Если есть реферер, обрабатываем реферальную связь
       if (referrerId) {
-        await handleReferralRegistration(userId, 'Игрок', referrerId);
+        // Сначала проверяем, что реферер существует
+        const referrerCheck = await pool.query(
+          'SELECT user_id FROM users WHERE user_id = $1',
+          [referrerId]
+        );
+        
+        if (referrerCheck.rows.length > 0) {
+          // Создаем запись о реферале с правильным именем
+          await pool.query(`
+            INSERT INTO user_referrals (referrer_id, referred_id, referred_name, reward_coins, claimed)
+            VALUES ($1, $2, $3, $4, $5)
+            ON CONFLICT (referred_id) DO NOTHING
+          `, [referrerId, userId, firstName, 200, false]);
+          
+          console.log(`✅ Referral link created: ${firstName} (${userId}) -> ${referrerId}`);
+        } else {
+          console.log('❌ Referrer not found:', referrerId);
+        }
       }
       
       res.status(200).json(insertResult.rows[0]);
