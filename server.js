@@ -21,16 +21,17 @@ const decodeInitData = (initData) => {
     for (const [key, value] of params.entries()) {
       if (key === 'user') {
         data.user = JSON.parse(value);
-      } else if (key === 'start_param') {
+      } else if (key === 'start_param' || key === 'startapp') {
+        // Обрабатываем и start_param и startapp
         data.start_param = value;
-        console.log('🎯 Found start_param in initData:', value);
+        console.log(`🎯 Found ${key} in initData:`, value);
       } else {
         data[key] = value;
       }
     }
     
     console.log('🔍 Decoded initData keys:', Object.keys(data));
-    console.log('🔍 start_param value:', data.start_param);
+    console.log('🔍 start_param/startapp value:', data.start_param);
     return data;
   } catch (error) {
     console.error('❌ Error decoding initData:', error);
