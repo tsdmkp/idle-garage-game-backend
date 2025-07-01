@@ -390,36 +390,6 @@ app.get('/leaderboard', async (req, res) => {
   return app._router.handle(req, res);
 });
 
-// Инициализируем базу данных и запускаем сервер
-initializeDatabase().then(() => {
-  return initializeFriendsDatabase();
-}).then(() => {
-  const server = app.listen(port, () => {
-    console.log(`🚀 Server running on port ${port}`);
-    console.log(`👥 Friends system enabled`);
-    console.log(`📊 Leaderboard endpoint: /api/leaderboard`);
-    console.log(`🎮 Game state endpoint: /api/game_state`);
-    console.log(`🤝 Friends endpoint: /api/friends`);
-  });
-  
-  // Обработка ошибки занятого порта
-  server.on('error', (err) => {
-    if (err.code === 'EADDRINUSE') {
-      console.log(`❌ Port ${port} is busy, trying ${port + 1}...`);
-      setTimeout(() => {
-        server.close();
-        app.listen(port + 1, () => {
-          console.log(`🚀 Server running on port ${port + 1}`);
-        });
-      }, 1000);
-    } else {
-      console.error('❌ Server error:', err);
-    }
-  });
-}).catch(err => {
-  console.error('❌ Failed to initialize database:', err);
-});
-
 // === СИСТЕМА ДРУЗЕЙ ===
 
 // Инициализация таблиц для друзей
@@ -607,3 +577,281 @@ app.post('/api/friends/claim', async (req, res) => {
     });
   }
 });
+
+// ========== ADSGRAM ИНТЕГРАЦИЯ ==========
+
+// Инициализация таблицы для логирования Adsgram наград
+const initializeAdsgramDatabase = async () => {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS adsgram_rewards (
+        id SERIAL PRIMARY KEY,
+        user_id VARCHAR(255) NOT NULL,
+        block_id VARCHAR(255),
+        reward_coins INTEGER DEFAULT 0,
+        reward_type VARCHAR(50) DEFAULT 'coins',
+        ip_address INET,
+        user_agent TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+    
+    // Создаем индексы для оптимизации
+    await pool.query(`
+      CREATE INDEX IF NOT EXISTS idx_adsgram_rewards_user_time ON adsgram_rewards(user_id, created_at);
+      CREATE INDEX IF NOT EXISTS idx_adsgram_rewards_block ON adsgram_rewards(block_id, created_at);
+    `);
+    
+    console.log('✅ Adsgram database table initialized');
+  } catch (err) {
+    console.error('❌ Error initializing Adsgram database:', err);
+  }
+};
+
+// Основной эндпоинт для валидации наград от Adsgram
+app.get('/api/adsgram/reward', async (req, res) => {
+  try {
+    const { userid, blockId, amount } = req.query;
+    
+    console.log('📺 Adsgram reward callback received:', {
+      userId: userid,
+      blockId: blockId,
+      amount: amount,
+      timestamp: new Date().toISOString(),
+      ip: req.ip || req.connection.remoteAddress,
+      userAgent: req.get('User-Agent')
+    });
+
+    // Валидация обязательных параметров
+    if (!userid) {
+      console.warn('⚠️ Missing userId parameter in Adsgram callback');
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Missing userId parameter' 
+      });
+    }
+
+    // Проверяем что пользователь существует
+    const userCheck = await pool.query(
+      'SELECT user_id, game_coins FROM users WHERE user_id = $1',
+      [userid]
+    );
+
+    if (userCheck.rows.length === 0) {
+      console.warn('⚠️ User not found in Adsgram callback:', userid);
+      return res.status(404).json({ 
+        success: false, 
+        error: 'User not found' 
+      });
+    }
+
+    const currentCoins = parseInt(userCheck.rows[0].game_coins) || 0;
+
+    // Определяем размер награды в зависимости от блока
+    let rewardCoins = 100; // Базовая награда
+    let rewardType = 'coins';
+    
+    // Настройки для разных типов блоков (обновите Block ID когда получите их)
+    if (blockId) {
+      const blockIdStr = blockId.toString();
+      if (blockIdStr.includes('bonus') || blockIdStr.includes('main')) {
+        // Основной блок - бонусные монеты
+        rewardCoins = 100;
+        rewardType = 'coins';
+      } else if (blockIdStr.includes('consolation') || blockIdStr.includes('race')) {
+        // Утешительный приз после гонки
+        rewardCoins = 50;
+        rewardType = 'coins';
+      } else if (blockIdStr.includes('boost') || blockIdStr.includes('income')) {
+        // Буст дохода - без монет, активируем буст отдельно
+        rewardCoins = 0;
+        rewardType = 'boost';
+      } else if (blockIdStr.includes('shop') || blockIdStr.includes('help')) {
+        // Помощь в магазине
+        rewardCoins = 200;
+        rewardType = 'coins';
+      } else {
+        // Неизвестный блок - базовая награда
+        rewardCoins = 100;
+        rewardType = 'coins';
+      }
+    }
+
+    // Защита от спама наград (не больше 20 наград в час)
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const recentRewardsCheck = await pool.query(`
+      SELECT COUNT(*) as count 
+      FROM adsgram_rewards 
+      WHERE user_id = $1 
+      AND created_at > $2
+    `, [userid, oneHourAgo]);
+
+    const recentRewardsCount = parseInt(recentRewardsCheck.rows[0]?.count) || 0;
+    if (recentRewardsCount >= 20) {
+      console.warn('🚨 Too many Adsgram rewards per hour for user:', userid, 'Count:', recentRewardsCount);
+      return res.status(429).json({ 
+        success: false, 
+        error: 'Too many rewards per hour' 
+      });
+    }
+
+    // Начинаем транзакцию
+    await pool.query('BEGIN');
+
+    try {
+      // Начисляем награду
+      let updateResult = null;
+      if (rewardCoins > 0) {
+        const newCoins = currentCoins + rewardCoins;
+        
+        updateResult = await pool.query(`
+          UPDATE users 
+          SET game_coins = $1,
+              last_collected_time = NOW()
+          WHERE user_id = $2
+          RETURNING game_coins
+        `, [newCoins, userid]);
+
+        console.log(`💰 Adsgram reward processed: +${rewardCoins} coins for user ${userid} (${currentCoins} -> ${newCoins})`);
+      }
+
+      // Логируем награду для аналитики
+      await pool.query(`
+        INSERT INTO adsgram_rewards (user_id, block_id, reward_coins, reward_type, ip_address, user_agent, created_at)
+        VALUES ($1, $2, $3, $4, $5, $6, NOW())
+      `, [
+        userid, 
+        blockId || 'unknown', 
+        rewardCoins, 
+        rewardType,
+        req.ip || req.connection.remoteAddress || 'unknown',
+        req.get('User-Agent') || 'unknown'
+      ]);
+
+      await pool.query('COMMIT');
+
+      // Возвращаем успешный ответ Adsgram серверу
+      const response = {
+        success: true,
+        userId: userid,
+        rewardCoins: rewardCoins,
+        rewardType: rewardType,
+        newBalance: updateResult ? parseInt(updateResult.rows[0].game_coins) : currentCoins,
+        blockId: blockId,
+        timestamp: new Date().toISOString(),
+        message: 'Reward processed successfully'
+      };
+
+      console.log('✅ Adsgram callback response:', response);
+      res.status(200).json(response);
+
+    } catch (transactionError) {
+      await pool.query('ROLLBACK');
+      throw transactionError;
+    }
+
+  } catch (error) {
+    console.error('❌ Critical error in Adsgram reward callback:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Internal server error',
+      timestamp: new Date().toISOString()
+    });
+  }
+});
+
+// Получение статистики просмотров рекламы (опционально)
+app.get('/api/adsgram/stats', async (req, res) => {
+  try {
+    const { userId } = req.query;
+    
+    if (!userId) {
+      return res.status(400).json({ error: 'userId parameter required' });
+    }
+
+    // Статистика за последние 24 часа
+    const dayAgo = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    
+    const stats = await pool.query(`
+      SELECT 
+        COUNT(*) as total_views,
+        SUM(reward_coins) as total_coins_earned,
+        COUNT(DISTINCT block_id) as different_blocks,
+        MIN(created_at) as first_view,
+        MAX(created_at) as last_view
+      FROM adsgram_rewards 
+      WHERE user_id = $1 
+      AND created_at > $2
+    `, [userId, dayAgo]);
+
+    const blockStats = await pool.query(`
+      SELECT 
+        block_id,
+        COUNT(*) as views,
+        SUM(reward_coins) as coins
+      FROM adsgram_rewards 
+      WHERE user_id = $1 
+      AND created_at > $2
+      GROUP BY block_id
+      ORDER BY views DESC
+    `, [userId, dayAgo]);
+
+    res.json({
+      success: true,
+      userId: userId,
+      period: '24h',
+      summary: stats.rows[0] || {
+        total_views: 0,
+        total_coins_earned: 0,
+        different_blocks: 0,
+        first_view: null,
+        last_view: null
+      },
+      byBlock: blockStats.rows
+    });
+
+  } catch (error) {
+    console.error('❌ Error getting Adsgram stats:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get stats' 
+    });
+  }
+});
+
+// ========== ЗАПУСК СЕРВЕРА ==========
+
+// Инициализируем базы данных и запускаем сервер
+initializeDatabase()
+  .then(() => initializeFriendsDatabase())
+  .then(() => initializeAdsgramDatabase())
+  .then(() => {
+    const server = app.listen(port, () => {
+      console.log(`🚀 Server running on port ${port}`);
+      console.log(`👥 Friends system enabled`);
+      console.log(`📺 Adsgram integration enabled`);
+      console.log(`📊 Leaderboard endpoint: /api/leaderboard`);
+      console.log(`🎮 Game state endpoint: /api/game_state`);
+      console.log(`🤝 Friends endpoint: /api/friends`);
+      console.log(`📺 Adsgram webhook: /api/adsgram/reward`);
+      console.log(`📈 Adsgram stats: /api/adsgram/stats`);
+    });
+    
+    // Обработка ошибки занятого порта
+    server.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.log(`❌ Port ${port} is busy, trying ${port + 1}...`);
+        setTimeout(() => {
+          server.close();
+          app.listen(port + 1, () => {
+            console.log(`🚀 Server running on port ${port + 1}`);
+          });
+        }, 1000);
+      } else {
+        console.error('❌ Server error:', err);
+      }
+    });
+  })
+  .catch(err => {
+    console.error('❌ Failed to initialize database:', err);
+  });
