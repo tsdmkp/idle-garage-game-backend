@@ -1,6 +1,7 @@
 const express = require('express');
 const { Pool } = require('pg');
 const cors = require('cors');
+const crypto = require('crypto');
 require('dotenv').config();
 
 const app = express();
@@ -9,6 +10,64 @@ const port = process.env.PORT || 3000;
 // Проверка переменных окружения
 console.log('Environment variables:');
 console.log('DATABASE_URL:', process.env.DATABASE_URL ? '[DATABASE_URL configured]' : 'undefined');
+
+// Функция для декодирования и проверки Telegram initData
+const decodeInitData = (initData) => {
+  try {
+    // Парсим URL-encoded строку
+    const params = new URLSearchParams(initData);
+    const data = {};
+    
+    for (const [key, value] of params.entries()) {
+      if (key === 'user') {
+        data.user = JSON.parse(value);
+      } else if (key === 'start_param') {
+        data.start_param = value;
+      } else {
+        data[key] = value;
+      }
+    }
+    
+    console.log('🔍 Decoded initData:', data);
+    return data;
+  } catch (error) {
+    console.error('❌ Error decoding initData:', error);
+    throw error;
+  }
+};
+
+// Middleware для обработки Telegram initData
+app.use(async (req, res, next) => {
+  const initDataHeader = req.headers['x-telegram-init-data'];
+  
+  if (initDataHeader) {
+    try {
+      const decodedData = decodeInitData(initDataHeader);
+      
+      if (decodedData.user) {
+        req.userId = decodedData.user.id?.toString();
+        req.firstName = decodedData.user.first_name || 'Игрок';
+        req.username = decodedData.user.username;
+      }
+      
+      // ВАЖНО: Извлекаем start_param для рефералов
+      req.referralCode = decodedData.start_param;
+      
+      console.log(`✅ Valid Init Data for userId: ${req.userId}`);
+      console.log(`🔗 Start param from initData: ${req.referralCode}`);
+      
+      next();
+    } catch (error) {
+      console.error('❌ Invalid X-Telegram-Init-Data header:', error);
+      // Пропускаем для разработки, в продакшене можно вернуть 401
+      next();
+    }
+  } else {
+    // Для запросов без initData (например, из браузера для разработки)
+    console.log('ℹ️ No X-Telegram-Init-Data header found');
+    next();
+  }
+});
 
 // Настройка PostgreSQL через CONNECTION_STRING
 const pool = new Pool({
@@ -82,9 +141,15 @@ const initializeDatabase = async () => {
 
 // Эндпоинт для получения состояния игры
 app.get('/api/game_state', async (req, res) => {
-  const userId = req.query.userId || 'default';
-  const referralCode = req.query.ref; // Получаем реферальный код
-  console.log('📥 GET game_state for userId:', userId, 'referral:', referralCode);
+  // Приоритет: данные из initData, затем из query параметров
+  const userId = req.userId || req.query.userId || 'default';
+  const referralCode = req.referralCode || req.query.ref;
+  const firstName = req.firstName || 'Игрок';
+  
+  console.log('📥 GET game_state for userId:', userId);
+  console.log('🔗 Referral code:', referralCode);
+  console.log('👤 First name:', firstName);
+  console.log('📋 Headers present:', !!req.headers['x-telegram-init-data']);
   
   try {
     const result = await pool.query('SELECT * FROM users WHERE user_id = $1', [userId]);
@@ -92,18 +157,28 @@ app.get('/api/game_state', async (req, res) => {
     if (result.rows.length === 0) {
       console.log('👤 Creating new user:', userId);
       
-      // Извлекаем ID реферера из кода
+      // Обработка реферального кода
       let referrerId = null;
       let startingCoins = 500;
       
       if (referralCode && referralCode.startsWith('ref_')) {
         referrerId = referralCode.replace('ref_', '');
-        startingCoins += 100; // Бонус новичку
-        console.log('👥 Referral detected:', referrerId, 'bonus coins:', startingCoins);
+        
+        // Проверяем, что пользователь не приглашает сам себя
+        if (referrerId !== userId) {
+          startingCoins += 100; // Бонус новичку
+          console.log('👥 Valid referral! Referrer:', referrerId, 'New user bonus:', startingCoins);
+        } else {
+          console.log('⚠️ Self-referral detected, ignoring');
+          referrerId = null;
+        }
+      } else if (referralCode) {
+        console.log('⚠️ Invalid referral code format:', referralCode);
+      } else {
+        console.log('ℹ️ No referral code provided');
       }
       
-      // Создаем нового пользователя  
-      const firstName = 'Игрок'; // По умолчанию, может быть передано из фронтенда
+      // Создаем нового пользователя
       const insertResult = await pool.query(`
         INSERT INTO users (
           user_id, first_name, username, player_level, game_coins, jet_coins, 
@@ -115,7 +190,7 @@ app.get('/api/game_state', async (req, res) => {
       `, [
         userId,
         firstName,
-        null,
+        req.username || null,
         1,
         startingCoins,
         0,
@@ -129,25 +204,24 @@ app.get('/api/game_state', async (req, res) => {
         referrerId
       ]);
       
-      // Если есть реферер, обрабатываем реферальную связь
+      // Если есть валидный реферер, создаем запись о реферале
       if (referrerId) {
-        // Сначала проверяем, что реферер существует
+        // Проверяем, что реферер существует
         const referrerCheck = await pool.query(
           'SELECT user_id FROM users WHERE user_id = $1',
           [referrerId]
         );
         
         if (referrerCheck.rows.length > 0) {
-          // Создаем запись о реферале с правильным именем
           await pool.query(`
             INSERT INTO user_referrals (referrer_id, referred_id, referred_name, reward_coins, claimed)
             VALUES ($1, $2, $3, $4, $5)
             ON CONFLICT (referred_id) DO NOTHING
           `, [referrerId, userId, firstName, 200, false]);
           
-          console.log(`✅ Referral link created: ${firstName} (${userId}) -> ${referrerId}`);
+          console.log(`✅ Referral recorded: ${firstName} (${userId}) -> ${referrerId}`);
         } else {
-          console.log('❌ Referrer not found:', referrerId);
+          console.log('❌ Referrer not found in database:', referrerId);
         }
       }
       
