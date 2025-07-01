@@ -23,12 +23,14 @@ const decodeInitData = (initData) => {
         data.user = JSON.parse(value);
       } else if (key === 'start_param') {
         data.start_param = value;
+        console.log('🎯 Found start_param in initData:', value);
       } else {
         data[key] = value;
       }
     }
     
-    console.log('🔍 Decoded initData:', data);
+    console.log('🔍 Decoded initData keys:', Object.keys(data));
+    console.log('🔍 start_param value:', data.start_param);
     return data;
   } catch (error) {
     console.error('❌ Error decoding initData:', error);
@@ -42,6 +44,7 @@ app.use(async (req, res, next) => {
   
   if (initDataHeader) {
     try {
+      console.log('📥 Raw initData header:', initDataHeader);
       const decodedData = decodeInitData(initDataHeader);
       
       if (decodedData.user) {
@@ -54,7 +57,20 @@ app.use(async (req, res, next) => {
       req.referralCode = decodedData.start_param;
       
       console.log(`✅ Valid Init Data for userId: ${req.userId}`);
+      console.log(`👤 User name: ${req.firstName}`);
       console.log(`🔗 Start param from initData: ${req.referralCode}`);
+      
+      // Если start_param отсутствует, попробуем альтернативные способы
+      if (!req.referralCode) {
+        console.log('⚠️ start_param not found in initData');
+        console.log('📋 Available initData keys:', Object.keys(decodedData));
+        
+        // Проверяем, может быть параметр в другом формате
+        if (decodedData.startapp) {
+          req.referralCode = decodedData.startapp;
+          console.log('🔧 Found startapp parameter:', req.referralCode);
+        }
+      }
       
       next();
     } catch (error) {
