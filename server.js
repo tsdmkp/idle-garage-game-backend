@@ -1633,7 +1633,114 @@ app.post('/api/pvp/challenge', async (req, res) => {
     if (opponentId.startsWith('bot_')) {
       const botId = opponentId.replace('bot_', '');
       const bot = await pool.query('SELECT * FROM pvp_bots WHERE bot_id = $1', [botId]);
-      
+      } else {
+  // 🎮 НОВАЯ ЛОГИКА ДЛЯ РЕАЛЬНЫХ ИГРОКОВ!
+  
+  console.log(`👥 Вызов реального игрока: ${opponentId}`);
+  
+  // Проверяем что соперник существует
+  const opponentCheck = await pool.query(
+    'SELECT user_id, first_name, player_cars, selected_car_id FROM users WHERE user_id = $1',
+    [opponentId]
+  );
+  
+  if (opponentCheck.rows.length === 0) {
+    // Возвращаем монеты
+    await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [entryFee, finalUserId]);
+    return res.status(400).json({ error: 'Игрок не найден' });
+  }
+  
+  const opponent = opponentCheck.rows[0];
+  const opponentCars = opponent.player_cars || [];
+  const opponentCar = opponentCars.find(car => car.id === opponent.selected_car_id) || opponentCars[0];
+  
+  if (!opponentCar) {
+    // Возвращаем монеты
+    await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [entryFee, finalUserId]);
+    return res.status(400).json({ error: 'У соперника нет машины' });
+  }
+  
+  const opponentPower = calculateCarScore(opponentCar);
+  
+  // Создаем вызов (НЕ автобой!)
+  const challenge = await pool.query(`
+    INSERT INTO pvp_challenges (
+      from_user_id, to_user_id, league, entry_fee, from_car_power, to_car_power, message
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7)
+    RETURNING *
+  `, [finalUserId, opponentId, playerLeague, entryFee, playerPower, opponentPower, challengeMessage || '']);
+  
+  // 🔥 АВТОМАТИЧЕСКИЙ БОЙ С РЕАЛЬНЫМ ИГРОКОМ (пока что)
+  // В будущем здесь будет система уведомлений и ожидания
+  
+  console.log('🤖 Автобой с реальным игроком (временно)');
+  
+  const battleResult = calculateBattleResult(currentCar, opponentCar);
+  const league = LEAGUES[playerLeague];
+  
+  const winnerReward = league.rewards.win;
+  const loserReward = league.rewards.lose;
+  
+  const isPlayerWinner = battleResult.winner === 'attacker';
+  const playerReward = isPlayerWinner ? winnerReward : loserReward;
+  const opponentReward = isPlayerWinner ? loserReward : winnerReward;
+  
+  // Создаем запись матча
+  await pool.query(`
+    INSERT INTO pvp_matches (
+      challenge_id, attacker_id, defender_id, league,
+      attacker_car_power, defender_car_power,
+      attacker_car_name, defender_car_name,
+      winner, attacker_reward, defender_reward,
+      attacker_score, defender_score, battle_details
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+  `, [
+    challenge.rows[0].challenge_id, finalUserId, opponentId, playerLeague,
+    playerPower, opponentPower,
+    currentCar.name, opponentCar.name,
+    battleResult.winner,
+    isPlayerWinner ? winnerReward : loserReward,
+    isPlayerWinner ? loserReward : winnerReward,
+    battleResult.attackerScore, battleResult.defenderScore,
+    JSON.stringify(battleResult)
+  ]);
+  
+  // Выдаем награды игроку
+  await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [playerReward, finalUserId]);
+  
+  // 🎁 ВЫДАЕМ НАГРАДЫ СОПЕРНИКУ ТОЖЕ!
+  await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [opponentReward, opponentId]);
+  
+  // Тратим топливо
+  await pool.query('UPDATE users SET fuel_count = fuel_count - 1 WHERE user_id = $1', [finalUserId]);
+  
+  // Обновляем статистику игрока
+  await updatePvPStats(finalUserId, isPlayerWinner);
+  
+  // 🏆 ОБНОВЛЯЕМ СТАТИСТИКУ СОПЕРНИКА ТОЖЕ!
+  await updatePvPStats(opponentId, !isPlayerWinner);
+  
+  // Завершаем вызов
+  await pool.query(`
+    UPDATE pvp_challenges 
+    SET status = 'completed', completed_at = NOW()
+    WHERE challenge_id = $1
+  `, [challenge.rows[0].challenge_id]);
+  
+  res.json({
+    success: true,
+    data: {
+      matchResult: {
+        winner: battleResult.winner,
+        yourResult: isPlayerWinner ? 'win' : 'lose',
+        yourReward: playerReward,
+        opponentName: opponent.first_name || 'Игрок',
+        battleDetails: battleResult,
+        isRealPlayer: true // 🎮 Флаг что это был реальный игрок!
+      }
+    }
+  });
+}
       if (bot.rows.length === 0) {
         // Возвращаем монеты
         await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [entryFee, finalUserId]);
