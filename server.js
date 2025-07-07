@@ -214,7 +214,9 @@ app.use(cors({
   credentials: true
 }));
 
-// Инициализация таблицы при старте
+
+// НАЙТИ в server.js функцию initializeDatabase() и ЗАМЕНИТЬ её на эту:
+
 const initializeDatabase = async () => {
   try {
     await pool.query(`
@@ -249,6 +251,7 @@ const initializeDatabase = async () => {
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS has_completed_tutorial BOOLEAN DEFAULT FALSE`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS invited_by VARCHAR(50)`);
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS referral_bonus_received BOOLEAN DEFAULT FALSE`);
+      await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS player_photo TEXT`);
       
       // ⛽ ДОБАВЛЯЕМ ПОЛЯ ТОПЛИВНОЙ СИСТЕМЫ
       await pool.query(`ALTER TABLE users ADD COLUMN IF NOT EXISTS fuel_count INTEGER DEFAULT 5`);
@@ -284,12 +287,8 @@ const initializeDatabase = async () => {
     await pool.query(`UPDATE users SET fuel_count = 5 WHERE fuel_count IS NULL`);
     
     console.log('✅ Database table initialized successfully with fuel system');
-  } catch (err) {
-    console.error('❌ Error initializing database:', err);
-  }
-// === ИНИЦИАЛИЗАЦИЯ PvP ТАБЛИЦ ===
-    // Добавить В КОНЕЦ функции initializeDatabase(), перед закрывающей скобкой }
-    
+
+    // ========== 🔥 PvP СИСТЕМА ИНИЦИАЛИЗАЦИЯ ==========
     console.log('🏁 Initializing PvP tables...');
     
     // 1. Таблица лиг игроков
@@ -409,12 +408,14 @@ const initializeDatabase = async () => {
     }
     
     console.log('✅ PvP tables initialized successfully');
-
-
-
-
-
+    // ========== КОНЕЦ PvP ИНИЦИАЛИЗАЦИИ ==========
+    
+  } catch (err) {
+    console.error('❌ Error initializing database:', err);
+  }
 };
+
+
 
 // ⛽ Функция проверки и восстановления топлива
 const checkAndRestoreFuel = (fuelCount, lastRaceTime, fuelRefillTime) => {
