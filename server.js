@@ -4,57 +4,28 @@ const cors = require('cors');
 const crypto = require('crypto');
 require('dotenv').config();
 
+// === ИМПОРТ КОНСТАНТ ===
+const { 
+  LEAGUES, 
+  LEAGUE_POINTS, 
+  BASE_CAR_STATS, 
+  GAME_LIMITS, 
+  REWARDS 
+} = require('./config/constants');
+
+
+
+
+
 // === PvP СИСТЕМА - КОНСТАНТЫ ===
 // Добавить ПОСЛЕ require('dotenv').config();
 // В server.js заменить LEAGUES на более сбалансированные награды:
 
-const LEAGUES = {
-  BRONZE: { 
-    name: 'Бронзовая лига', 
-    minPower: 0, 
-    maxPower: 199,
-    entryFee: 25,  // ⚖️ СИЛЬНО УМЕНЬШИЛИ
-    rewards: { win: 40, lose: 15 },  // ⚖️ СИЛЬНО УМЕНЬШИЛИ
-    icon: '🥉',
-    color: '#cd7f32'
-  },
-  SILVER: { 
-    name: 'Серебряная лига', 
-    minPower: 200, 
-    maxPower: 299,
-    entryFee: 50,  // ⚖️ СИЛЬНО УМЕНЬШИЛИ  
-    rewards: { win: 80, lose: 25 },  // ⚖️ СИЛЬНО УМЕНЬШИЛИ
-    icon: '🥈',
-    color: '#c0c0c0'
-  },
-  GOLD: { 
-    name: 'Золотая лига', 
-    minPower: 300, 
-    maxPower: 399,
-    entryFee: 100,  // ⚖️ СИЛЬНО УМЕНЬШИЛИ
-    rewards: { win: 160, lose: 50 },  // ⚖️ СИЛЬНО УМЕНЬШИЛИ
-    icon: '🥇',
-    color: '#ffd700'
-  },
-  PLATINUM: { 
-    name: 'Платиновая лига', 
-    minPower: 400, 
-    maxPower: 999999,
-    entryFee: 200,  // ⚖️ СИЛЬНО УМЕНЬШИЛИ
-    rewards: { win: 320, lose: 100 },  // ⚖️ СИЛЬНО УМЕНЬШИЛИ
-    icon: '💎',
-    color: '#e5e4e2'
-  }
-};
 
 
 
-const LEAGUE_POINTS = {
-  win: 10,
-  lose: -3,
-  promotion: 100,
-  demotion: -50
-};
+
+
 
 // Функции расчета для PvP
 function getLeagueByPower(carPower) {
@@ -69,16 +40,7 @@ function getLeagueByPower(carPower) {
 function calculateCarScore(car) {
   if (!car || !car.parts) return 0;
   
-  const baseStats = {
-    'car_001': { power: 40, speed: 70, style: 5, reliability: 25 },
-    'car_002': { power: 60, speed: 95, style: 10, reliability: 35 },
-    'car_003': { power: 75, speed: 110, style: 15, reliability: 45 },
-    'car_004': { power: 90, speed: 125, style: 20, reliability: 50 },
-    'car_005': { power: 110, speed: 140, style: 30, reliability: 55 },
-    'car_006': { power: 130, speed: 160, style: 40, reliability: 60 }
-  };
-  
-  const base = baseStats[car.id] || baseStats['car_001'];
+ const base = BASE_CAR_STATS[car.id] || BASE_CAR_STATS['car_001'];
   
   let power = base.power;
   let speed = base.speed;
