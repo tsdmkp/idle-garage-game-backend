@@ -12,8 +12,8 @@ const LEAGUES = {
     name: 'Бронзовая лига', 
     minPower: 0, 
     maxPower: 199,
-    entryFee: 100,
-    rewards: { win: 150, lose: 50 },
+    entryFee: 50,  // ⚖️ УМЕНЬШИЛИ с 100
+    rewards: { win: 80, lose: 25 },  // ⚖️ УМЕНЬШИЛИ награды
     icon: '🥉',
     color: '#cd7f32'
   },
@@ -21,8 +21,8 @@ const LEAGUES = {
     name: 'Серебряная лига', 
     minPower: 200, 
     maxPower: 299,
-    entryFee: 250,
-    rewards: { win: 400, lose: 100 },
+    entryFee: 100,  // ⚖️ УМЕНЬШИЛИ с 250
+    rewards: { win: 180, lose: 50 },  // ⚖️ УМЕНЬШИЛИ награды
     icon: '🥈',
     color: '#c0c0c0'
   },
@@ -30,8 +30,8 @@ const LEAGUES = {
     name: 'Золотая лига', 
     minPower: 300, 
     maxPower: 399,
-    entryFee: 500,
-    rewards: { win: 800, lose: 200 },
+    entryFee: 200,  // ⚖️ УМЕНЬШИЛИ с 500
+    rewards: { win: 350, lose: 100 },  // ⚖️ УМЕНЬШИЛИ награды
     icon: '🥇',
     color: '#ffd700'
   },
@@ -39,8 +39,8 @@ const LEAGUES = {
     name: 'Платиновая лига', 
     minPower: 400, 
     maxPower: 999999,
-    entryFee: 1000,
-    rewards: { win: 1500, lose: 300 },
+    entryFee: 400,  // ⚖️ УМЕНЬШИЛИ с 1000
+    rewards: { win: 650, lose: 150 },  // ⚖️ УМЕНЬШИЛИ награды
     icon: '💎',
     color: '#e5e4e2'
   }
@@ -91,16 +91,42 @@ function calculateCarScore(car) {
 }
 
 function calculateBattleResult(attackerCar, defenderCar) {
-  const attackerScore = calculateCarScore(attackerCar) * (0.9 + Math.random() * 0.2);
-  const defenderScore = calculateCarScore(defenderCar) * (0.9 + Math.random() * 0.2);
+  const attackerBasePower = calculateCarScore(attackerCar);
+  const defenderBasePower = calculateCarScore(defenderCar);
   
+  // 🎲 УЛУЧШЕННАЯ ФОРМУЛА БОЯ С БОЛЬШЕЙ СЛУЧАЙНОСТЬЮ
+  // Базовый разброс ±20% вместо ±10%
+  const attackerMultiplier = 0.8 + Math.random() * 0.4; // от 0.8 до 1.2
+  const defenderMultiplier = 0.8 + Math.random() * 0.4; // от 0.8 до 1.2
+  
+  // 🎯 ДОБАВЛЯЕМ ФАКТОР "ВЕЗЕНИЯ" - дополнительный шанс на победу
+  const luckFactor = Math.random();
+  const attackerLuck = luckFactor < 0.1 ? 1.3 : 1.0; // 10% шанс на удачу (+30%)
+  const defenderLuck = luckFactor > 0.9 ? 1.3 : 1.0; // 10% шанс на удачу (+30%)
+  
+  const attackerScore = attackerBasePower * attackerMultiplier * attackerLuck;
+  const defenderScore = defenderBasePower * defenderMultiplier * defenderLuck;
+  
+  // 🏆 ОПРЕДЕЛЯЕМ ПОБЕДИТЕЛЯ
   const winner = attackerScore > defenderScore ? 'attacker' : 'defender';
+  
+  console.log('🥊 Результат боя:', {
+    attackerPower: attackerBasePower,
+    defenderPower: defenderBasePower,
+    attackerFinalScore: Math.round(attackerScore),
+    defenderFinalScore: Math.round(defenderScore),
+    winner,
+    attackerLuck: attackerLuck > 1 ? 'ВЕЗЕНИЕ!' : 'норма',
+    defenderLuck: defenderLuck > 1 ? 'ВЕЗЕНИЕ!' : 'норма'
+  });
   
   return {
     winner,
     attackerScore: Math.round(attackerScore * 100) / 100,
     defenderScore: Math.round(defenderScore * 100) / 100,
-    margin: Math.abs(attackerScore - defenderScore)
+    margin: Math.abs(attackerScore - defenderScore),
+    attackerHadLuck: attackerLuck > 1,
+    defenderHadLuck: defenderLuck > 1
   };
 }
 
@@ -1634,7 +1660,7 @@ app.post('/api/pvp/challenge', async (req, res) => {
       const battleResult = calculateBattleResult(currentCar, botCar);
       const league = LEAGUES[playerLeague];
       
-      const winnerReward = league.rewards.win * 2;
+      const winnerReward = league.rewards.win;
       const loserReward = league.rewards.lose;
       
       const isPlayerWinner = battleResult.winner === 'attacker';
