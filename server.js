@@ -4,6 +4,106 @@ const cors = require('cors');
 const crypto = require('crypto');
 require('dotenv').config();
 
+// === PvP СИСТЕМА - КОНСТАНТЫ ===
+// Добавить ПОСЛЕ require('dotenv').config();
+
+const LEAGUES = {
+  BRONZE: { 
+    name: 'Бронзовая лига', 
+    minPower: 0, 
+    maxPower: 199,
+    entryFee: 100,
+    rewards: { win: 150, lose: 50 },
+    icon: '🥉',
+    color: '#cd7f32'
+  },
+  SILVER: { 
+    name: 'Серебряная лига', 
+    minPower: 200, 
+    maxPower: 299,
+    entryFee: 250,
+    rewards: { win: 400, lose: 100 },
+    icon: '🥈',
+    color: '#c0c0c0'
+  },
+  GOLD: { 
+    name: 'Золотая лига', 
+    minPower: 300, 
+    maxPower: 399,
+    entryFee: 500,
+    rewards: { win: 800, lose: 200 },
+    icon: '🥇',
+    color: '#ffd700'
+  },
+  PLATINUM: { 
+    name: 'Платиновая лига', 
+    minPower: 400, 
+    maxPower: 999999,
+    entryFee: 1000,
+    rewards: { win: 1500, lose: 300 },
+    icon: '💎',
+    color: '#e5e4e2'
+  }
+};
+
+const LEAGUE_POINTS = {
+  win: 10,
+  lose: -3,
+  promotion: 100,
+  demotion: -50
+};
+
+// Функции расчета для PvP
+function getLeagueByPower(carPower) {
+  for (const [key, league] of Object.entries(LEAGUES)) {
+    if (carPower >= league.minPower && carPower <= league.maxPower) {
+      return key;
+    }
+  }
+  return 'BRONZE';
+}
+
+function calculateCarScore(car) {
+  if (!car || !car.parts) return 0;
+  
+  const baseStats = {
+    'car_001': { power: 40, speed: 70, style: 5, reliability: 25 },
+    'car_002': { power: 60, speed: 95, style: 10, reliability: 35 },
+    'car_003': { power: 75, speed: 110, style: 15, reliability: 45 },
+    'car_004': { power: 90, speed: 125, style: 20, reliability: 50 },
+    'car_005': { power: 110, speed: 140, style: 30, reliability: 55 },
+    'car_006': { power: 130, speed: 160, style: 40, reliability: 60 }
+  };
+  
+  const base = baseStats[car.id] || baseStats['car_001'];
+  
+  let power = base.power;
+  let speed = base.speed;
+  let style = base.style;
+  let reliability = base.reliability;
+  
+  if (car.parts.engine) power += (car.parts.engine.level || 0) * 5;
+  if (car.parts.tires) speed += (car.parts.tires.level || 0) * 3;
+  if (car.parts.style_body) style += (car.parts.style_body.level || 0) * 4;
+  if (car.parts.reliability_base) reliability += (car.parts.reliability_base.level || 0) * 5;
+  
+  return power + speed + style + reliability;
+}
+
+function calculateBattleResult(attackerCar, defenderCar) {
+  const attackerScore = calculateCarScore(attackerCar) * (0.9 + Math.random() * 0.2);
+  const defenderScore = calculateCarScore(defenderCar) * (0.9 + Math.random() * 0.2);
+  
+  const winner = attackerScore > defenderScore ? 'attacker' : 'defender';
+  
+  return {
+    winner,
+    attackerScore: Math.round(attackerScore * 100) / 100,
+    defenderScore: Math.round(defenderScore * 100) / 100,
+    margin: Math.abs(attackerScore - defenderScore)
+  };
+}
+
 const app = express();
 const port = process.env.PORT || 3000;
 
@@ -187,6 +287,133 @@ const initializeDatabase = async () => {
   } catch (err) {
     console.error('❌ Error initializing database:', err);
   }
+// === ИНИЦИАЛИЗАЦИЯ PvP ТАБЛИЦ ===
+    // Добавить В КОНЕЦ функции initializeDatabase(), перед закрывающей скобкой }
+    
+    console.log('🏁 Initializing PvP tables...');
+    
+    // 1. Таблица лиг игроков
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pvp_leagues (
+        user_id TEXT PRIMARY KEY,
+        current_league VARCHAR(20) DEFAULT 'BRONZE',
+        league_points INTEGER DEFAULT 0,
+        wins_today INTEGER DEFAULT 0,
+        losses_today INTEGER DEFAULT 0,
+        total_wins INTEGER DEFAULT 0,
+        total_losses INTEGER DEFAULT 0,
+        win_streak INTEGER DEFAULT 0,
+        best_win_streak INTEGER DEFAULT 0,
+        last_league_update TIMESTAMP DEFAULT NOW(),
+        last_battle_date TIMESTAMP,
+        created_at TIMESTAMP DEFAULT NOW(),
+        updated_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    // 2. Таблица активных вызовов
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pvp_challenges (
+        challenge_id SERIAL PRIMARY KEY,
+        from_user_id TEXT NOT NULL,
+        to_user_id TEXT NOT NULL,
+        league VARCHAR(20) NOT NULL,
+        entry_fee INTEGER NOT NULL,
+        from_car_power INTEGER NOT NULL,
+        to_car_power INTEGER,
+        message TEXT,
+        created_at TIMESTAMP DEFAULT NOW(),
+        expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '24 hours',
+        status VARCHAR(20) DEFAULT 'pending',
+        responded_at TIMESTAMP,
+        completed_at TIMESTAMP
+      )
+    `);
+
+    // 3. Таблица завершенных матчей
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pvp_matches (
+        match_id SERIAL PRIMARY KEY,
+        challenge_id INTEGER REFERENCES pvp_challenges(challenge_id),
+        attacker_id TEXT NOT NULL,
+        defender_id TEXT NOT NULL,
+        league VARCHAR(20) NOT NULL,
+        attacker_car_power INTEGER NOT NULL,
+        defender_car_power INTEGER NOT NULL,
+        attacker_car_name VARCHAR(100),
+        defender_car_name VARCHAR(100),
+        winner TEXT NOT NULL,
+        attacker_reward INTEGER NOT NULL,
+        defender_reward INTEGER NOT NULL,
+        attacker_score DECIMAL(10,2),
+        defender_score DECIMAL(10,2),
+        battle_details JSONB,
+        match_date TIMESTAMP DEFAULT NOW(),
+        season_week INTEGER DEFAULT EXTRACT(WEEK FROM NOW())
+      )
+    `);
+
+    // 4. Таблица ботов
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS pvp_bots (
+        bot_id SERIAL PRIMARY KEY,
+        bot_name VARCHAR(50) NOT NULL,
+        car_name VARCHAR(100) NOT NULL,
+        car_power INTEGER NOT NULL,
+        league VARCHAR(20) NOT NULL,
+        wins INTEGER DEFAULT 0,
+        losses INTEGER DEFAULT 0,
+        last_online TIMESTAMP DEFAULT NOW(),
+        personality_type VARCHAR(20) DEFAULT 'normal',
+        response_delay_min INTEGER DEFAULT 5,
+        response_delay_max INTEGER DEFAULT 120,
+        accept_rate DECIMAL(3,2) DEFAULT 0.85,
+        is_active BOOLEAN DEFAULT true,
+        created_at TIMESTAMP DEFAULT NOW()
+      )
+    `);
+
+    // 5. Создаем индексы для оптимизации
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pvp_leagues_league ON pvp_leagues(current_league)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pvp_challenges_to_user ON pvp_challenges(to_user_id, status)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pvp_challenges_from_user ON pvp_challenges(from_user_id, status)`);
+    await pool.query(`CREATE INDEX IF NOT EXISTS idx_pvp_bots_league_power ON pvp_bots(league, car_power)`);
+    
+    // 6. Проверяем есть ли боты, если нет - создаем
+    const botsCount = await pool.query('SELECT COUNT(*) as count FROM pvp_bots');
+    if (parseInt(botsCount.rows[0].count) === 0) {
+      console.log('🤖 Creating initial PvP bots...');
+      await pool.query(`
+        INSERT INTO pvp_bots (bot_name, car_name, car_power, league, wins, losses, personality_type, accept_rate) VALUES
+        ('Дмитрий_Новичок', 'Ржавая "Копейка"', 145, 'BRONZE', 15, 8, 'defensive', 0.95),
+        ('Сергей_Учится', 'Ржавая "Копейка"', 155, 'BRONZE', 22, 12, 'normal', 0.85),
+        ('Андрей_Гонщик', 'Бодрая "Девятка"', 175, 'BRONZE', 31, 19, 'aggressive', 0.75),
+        ('Михаил_Драйв', 'Бодрая "Девятка"', 190, 'BRONZE', 28, 15, 'normal', 0.80),
+        ('Алексей_Про', 'Старый "Японец"', 220, 'SILVER', 45, 23, 'normal', 0.82),
+        ('Денис_Форсаж', 'Старый "Японец"', 240, 'SILVER', 52, 28, 'aggressive', 0.78),
+        ('Игорь_Скорость', 'Старый "Японец"', 260, 'SILVER', 38, 22, 'defensive', 0.88),
+        ('Роман_Турбо', 'Старый "Японец"', 285, 'SILVER', 41, 25, 'normal', 0.84),
+        ('Владимир_Мастер', 'Легендарный "Мерс"', 320, 'GOLD', 67, 31, 'aggressive', 0.76),
+        ('Евгений_Легенда', 'Легендарный "Мерс"', 340, 'GOLD', 71, 29, 'normal', 0.81),
+        ('Николай_Король', 'Легендарный "Мерс"', 365, 'GOLD', 58, 35, 'defensive', 0.87),
+        ('Виктор_Чемпион', 'Легендарный "Мерс"', 385, 'GOLD', 64, 33, 'normal', 0.83),
+        ('Александр_Бог', 'Заряженный "Баварец"', 420, 'PLATINUM', 89, 21, 'aggressive', 0.73),
+        ('Максим_Титан', 'Заряженный "Баварец"', 460, 'PLATINUM', 94, 18, 'normal', 0.79),
+        ('Павел_Император', 'Безумный "Скайлайн"', 520, 'PLATINUM', 78, 26, 'defensive', 0.85),
+        ('Дмитрий_Всевышний', 'Безумный "Скайлайн"', 580, 'PLATINUM', 103, 15, 'aggressive', 0.71)
+      `);
+      
+      // Обновляем время онлайн ботов
+      await pool.query(`UPDATE pvp_bots SET last_online = NOW() - (RANDOM() * INTERVAL '2 hours')`);
+      console.log('✅ PvP bots created successfully');
+    }
+    
+    console.log('✅ PvP tables initialized successfully');
+
+
+
+
+
 };
 
 // ⛽ Функция проверки и восстановления топлива
@@ -1157,6 +1384,433 @@ app.get('/api/admin/stats', async (req, res) => {
     });
   }
 });
+
+// === PvP API ЭНДПОИНТЫ ===
+// Добавить ПОСЛЕ всех существующих эндпоинтов, ПЕРЕД middleware для 404
+
+// GET /api/pvp/league-info - Информация о лиге игрока
+app.get('/api/pvp/league-info', async (req, res) => {
+  try {
+    const userId = req.query.userId || req.userId || 'default';
+    
+    // Получаем текущую машину и её мощность
+    const userResult = await pool.query(`
+      SELECT 
+        u.user_id, u.first_name, u.game_coins, u.fuel_count,
+        u.player_cars, u.selected_car_id
+      FROM users u
+      WHERE u.user_id = $1
+    `, [userId]);
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+    
+    const user = userResult.rows[0];
+    const playerCars = user.player_cars || [];
+    const selectedCarId = user.selected_car_id;
+    const currentCar = playerCars.find(car => car.id === selectedCarId) || playerCars[0];
+    
+    if (!currentCar) {
+      return res.status(400).json({ error: 'Нет активной машины' });
+    }
+    
+    const carPower = calculateCarScore(currentCar);
+    const playerLeague = getLeagueByPower(carPower);
+    
+    // Получаем или создаем запись в pvp_leagues
+    let pvpStats = await pool.query(
+      'SELECT * FROM pvp_leagues WHERE user_id = $1',
+      [userId]
+    );
+    
+    if (pvpStats.rows.length === 0) {
+      // Создаем новую запись
+      pvpStats = await pool.query(`
+        INSERT INTO pvp_leagues (user_id, current_league) 
+        VALUES ($1, $2) 
+        RETURNING *
+      `, [userId, playerLeague]);
+    } else {
+      // Обновляем лигу если мощность машины изменилась
+      if (pvpStats.rows[0].current_league !== playerLeague) {
+        pvpStats = await pool.query(`
+          UPDATE pvp_leagues 
+          SET current_league = $2, last_league_update = NOW()
+          WHERE user_id = $1 
+          RETURNING *
+        `, [userId, playerLeague]);
+      }
+    }
+    
+    const stats = pvpStats.rows[0];
+    
+    // Получаем позицию в рейтинге лиги
+    const leaguePosition = await pool.query(`
+      SELECT COUNT(*) + 1 as position
+      FROM pvp_leagues 
+      WHERE current_league = $1 
+        AND (total_wins > $2 OR (total_wins = $2 AND total_losses < $3))
+    `, [playerLeague, stats.total_wins, stats.total_losses]);
+    
+    res.json({
+      success: true,
+      data: {
+        currentLeague: playerLeague,
+        leagueInfo: LEAGUES[playerLeague],
+        carPower,
+        carName: currentCar.name,
+        stats: stats,
+        position: leaguePosition.rows[0]?.position || 1,
+        canFight: user.fuel_count > 0
+      }
+    });
+    
+  } catch (error) {
+    console.error('Ошибка получения информации о лиге:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// GET /api/pvp/opponents - Поиск соперников
+app.get('/api/pvp/opponents', async (req, res) => {
+  try {
+    const userId = req.query.userId || req.userId || 'default';
+    
+    // Получаем информацию о текущем игроке
+    const userResult = await pool.query(`
+      SELECT 
+        u.user_id, u.first_name, u.game_coins, u.fuel_count,
+        u.player_cars, u.selected_car_id
+      FROM users u
+      WHERE u.user_id = $1
+    `, [userId]);
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+    
+    const user = userResult.rows[0];
+    const playerCars = user.player_cars || [];
+    const currentCar = playerCars.find(car => car.id === user.selected_car_id) || playerCars[0];
+    
+    if (!currentCar) {
+      return res.status(400).json({ error: 'Нет активной машины' });
+    }
+    
+    const playerPower = calculateCarScore(currentCar);
+    const playerLeague = getLeagueByPower(playerPower);
+    
+    // Поиск реальных игроков (упрощенно - пока только боты)
+    const realPlayers = [];
+    
+    // Поиск ботов
+    const bots = await pool.query(`
+      SELECT 
+        'bot_' || bot_id as user_id,
+        bot_name as username,
+        car_name,
+        car_power,
+        wins as total_wins,
+        losses as total_losses,
+        league as current_league,
+        'bot' as type,
+        last_online as last_active
+      FROM pvp_bots
+      WHERE car_power BETWEEN $1 AND $2
+        AND league = $3
+        AND is_active = true
+      ORDER BY RANDOM()
+      LIMIT 8
+    `, [playerPower - 50, playerPower + 50, playerLeague]);
+    
+    // Объединяем и сортируем
+    const allOpponents = [...realPlayers, ...bots.rows].map(opponent => ({
+      ...opponent,
+      winRate: opponent.total_wins + opponent.total_losses > 0 
+        ? Math.round((opponent.total_wins / (opponent.total_wins + opponent.total_losses)) * 100)
+        : 0,
+      powerDifference: opponent.car_power - playerPower,
+      isOnline: opponent.type === 'bot' || 
+        (new Date() - new Date(opponent.last_active)) < 30 * 60 * 1000,
+      priority: opponent.type === 'player' ? 1 : 2
+    })).sort((a, b) => a.priority - b.priority);
+    
+    res.json({
+      success: true,
+      data: {
+        opponents: allOpponents,
+        playerLeague,
+        playerPower,
+        entryFee: LEAGUES[playerLeague].entryFee
+      }
+    });
+    
+  } catch (error) {
+    console.error('Ошибка поиска соперников:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// POST /api/pvp/challenge - Вызвать на дуэль
+app.post('/api/pvp/challenge', async (req, res) => {
+  try {
+    const { userId, opponentId, message } = req.body;
+    const finalUserId = userId || req.userId || 'default';
+    
+    if (!opponentId) {
+      return res.status(400).json({ error: 'Не указан соперник' });
+    }
+    
+    if (opponentId === finalUserId) {
+      return res.status(400).json({ error: 'Нельзя вызвать самого себя' });
+    }
+    
+    // Получаем информацию о машине игрока
+    const userResult = await pool.query(`
+      SELECT 
+        u.user_id, u.first_name, u.game_coins, u.fuel_count,
+        u.player_cars, u.selected_car_id
+      FROM users u
+      WHERE u.user_id = $1
+    `, [finalUserId]);
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ error: 'Пользователь не найден' });
+    }
+    
+    const user = userResult.rows[0];
+    const playerCars = user.player_cars || [];
+    const currentCar = playerCars.find(car => car.id === user.selected_car_id) || playerCars[0];
+    
+    if (!currentCar || user.fuel_count <= 0) {
+      return res.status(400).json({ error: 'Недостаточно топлива для боя' });
+    }
+    
+    const playerPower = calculateCarScore(currentCar);
+    const playerLeague = getLeagueByPower(playerPower);
+    const entryFee = LEAGUES[playerLeague].entryFee;
+    
+    // Проверяем баланс
+    if (user.game_coins < entryFee) {
+      return res.status(400).json({ error: 'Недостаточно монет для участия' });
+    }
+    
+    // Списываем монеты
+    await pool.query('UPDATE users SET game_coins = game_coins - $1 WHERE user_id = $2', [entryFee, finalUserId]);
+    
+    // Если это бот - автоматически проводим бой
+    if (opponentId.startsWith('bot_')) {
+      const botId = opponentId.replace('bot_', '');
+      const bot = await pool.query('SELECT * FROM pvp_bots WHERE bot_id = $1', [botId]);
+      
+      if (bot.rows.length === 0) {
+        // Возвращаем монеты
+        await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [entryFee, finalUserId]);
+        return res.status(400).json({ error: 'Бот не найден' });
+      }
+      
+      // Создаем вызов
+      const challenge = await pool.query(`
+        INSERT INTO pvp_challenges (
+          from_user_id, to_user_id, league, entry_fee, from_car_power, to_car_power
+        ) VALUES ($1, $2, $3, $4, $5, $6)
+        RETURNING *
+      `, [finalUserId, opponentId, playerLeague, entryFee, playerPower, bot.rows[0].car_power]);
+      
+      // Автоматический бой с ботом
+      const botCar = {
+        id: 'bot_car',
+        name: bot.rows[0].car_name,
+        parts: {
+          engine: { level: Math.floor(bot.rows[0].car_power / 100) },
+          tires: { level: 0 },
+          style_body: { level: 0 },
+          reliability_base: { level: 0 }
+        }
+      };
+      
+      const battleResult = calculateBattleResult(currentCar, botCar);
+      const league = LEAGUES[playerLeague];
+      
+      const winnerReward = league.rewards.win * 2;
+      const loserReward = league.rewards.lose;
+      
+      const isPlayerWinner = battleResult.winner === 'attacker';
+      const playerReward = isPlayerWinner ? winnerReward : loserReward;
+      
+      // Создаем запись матча
+      await pool.query(`
+        INSERT INTO pvp_matches (
+          challenge_id, attacker_id, defender_id, league,
+          attacker_car_power, defender_car_power,
+          attacker_car_name, defender_car_name,
+          winner, attacker_reward, defender_reward,
+          attacker_score, defender_score, battle_details
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+      `, [
+        challenge.rows[0].challenge_id, finalUserId, opponentId, playerLeague,
+        playerPower, bot.rows[0].car_power,
+        currentCar.name, bot.rows[0].car_name,
+        battleResult.winner,
+        isPlayerWinner ? winnerReward : loserReward,
+        isPlayerWinner ? loserReward : winnerReward,
+        battleResult.attackerScore, battleResult.defenderScore,
+        JSON.stringify(battleResult)
+      ]);
+      
+      // Выдаем награды игроку
+      await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [playerReward, finalUserId]);
+      
+      // Тратим топливо
+      await pool.query('UPDATE users SET fuel_count = fuel_count - 1 WHERE user_id = $1', [finalUserId]);
+      
+      // Обновляем статистику игрока
+      await updatePvPStats(finalUserId, isPlayerWinner);
+      
+      // Обновляем статистику бота
+      if (isPlayerWinner) {
+        await pool.query('UPDATE pvp_bots SET losses = losses + 1 WHERE bot_id = $1', [botId]);
+      } else {
+        await pool.query('UPDATE pvp_bots SET wins = wins + 1 WHERE bot_id = $1', [botId]);
+      }
+      
+      // Завершаем вызов
+      await pool.query(`
+        UPDATE pvp_challenges 
+        SET status = 'completed', completed_at = NOW()
+        WHERE challenge_id = $1
+      `, [challenge.rows[0].challenge_id]);
+      
+      res.json({
+        success: true,
+        data: {
+          matchResult: {
+            winner: battleResult.winner,
+            yourResult: isPlayerWinner ? 'win' : 'lose',
+            yourReward: playerReward,
+            battleDetails: battleResult
+          }
+        }
+      });
+      
+    } else {
+      // Реальный игрок - пока не реализовано
+      res.status(400).json({ error: 'PvP с реальными игроками пока не доступно' });
+    }
+    
+  } catch (error) {
+    console.error('Ошибка создания вызова:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// Функция обновления статистики PvP
+async function updatePvPStats(userId, isWin) {
+  try {
+    const pointsChange = isWin ? LEAGUE_POINTS.win : LEAGUE_POINTS.lose;
+    
+    if (isWin) {
+      await pool.query(`
+        INSERT INTO pvp_leagues (user_id, total_wins, wins_today, league_points, win_streak, best_win_streak, last_battle_date, updated_at)
+        VALUES ($1, 1, 1, $2, 1, 1, NOW(), NOW())
+        ON CONFLICT (user_id) 
+        DO UPDATE SET 
+          total_wins = pvp_leagues.total_wins + 1,
+          wins_today = pvp_leagues.wins_today + 1,
+          league_points = pvp_leagues.league_points + $2,
+          win_streak = pvp_leagues.win_streak + 1,
+          best_win_streak = GREATEST(pvp_leagues.best_win_streak, pvp_leagues.win_streak + 1),
+          last_battle_date = NOW(),
+          updated_at = NOW()
+      `, [userId, pointsChange]);
+    } else {
+      await pool.query(`
+        INSERT INTO pvp_leagues (user_id, total_losses, losses_today, league_points, win_streak, last_battle_date, updated_at)
+        VALUES ($1, 1, 1, GREATEST(0, $2), 0, NOW(), NOW())
+        ON CONFLICT (user_id) 
+        DO UPDATE SET 
+          total_losses = pvp_leagues.total_losses + 1,
+          losses_today = pvp_leagues.losses_today + 1,
+          league_points = GREATEST(0, pvp_leagues.league_points + $2),
+          win_streak = 0,
+          last_battle_date = NOW(),
+          updated_at = NOW()
+      `, [userId, pointsChange]);
+    }
+    
+  } catch (error) {
+    console.error('Ошибка обновления статистики PvP:', error);
+  }
+}
+
+// GET /api/pvp/match-history - История боев
+app.get('/api/pvp/match-history', async (req, res) => {
+  try {
+    const userId = req.query.userId || req.userId || 'default';
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 20;
+    const offset = (page - 1) * limit;
+    
+    const matches = await pool.query(`
+      SELECT 
+        m.*,
+        CASE 
+          WHEN m.attacker_id = $1 THEN 
+            CASE WHEN m.defender_id LIKE 'bot_%' THEN b_def.bot_name ELSE 'Игрок' END
+          ELSE 
+            CASE WHEN m.attacker_id LIKE 'bot_%' THEN b_att.bot_name ELSE 'Игрок' END
+        END as opponent_name,
+        CASE 
+          WHEN m.attacker_id = $1 THEN m.defender_car_name
+          ELSE m.attacker_car_name
+        END as opponent_car,
+        CASE 
+          WHEN m.attacker_id = $1 THEN 'attacker'
+          ELSE 'defender'
+        END as your_role,
+        CASE 
+          WHEN (m.attacker_id = $1 AND m.winner = 'attacker') OR 
+               (m.defender_id = $1 AND m.winner = 'defender')
+          THEN 'win' ELSE 'lose'
+        END as result
+      FROM pvp_matches m
+      LEFT JOIN pvp_bots b_att ON m.attacker_id = 'bot_' || b_att.bot_id
+      LEFT JOIN pvp_bots b_def ON m.defender_id = 'bot_' || b_def.bot_id
+      WHERE m.attacker_id = $1 OR m.defender_id = $1
+      ORDER BY m.match_date DESC
+      LIMIT $2 OFFSET $3
+    `, [userId, limit, offset]);
+    
+    const totalCount = await pool.query(`
+      SELECT COUNT(*) as count FROM pvp_matches 
+      WHERE attacker_id = $1 OR defender_id = $1
+    `, [userId]);
+    
+    res.json({
+      success: true,
+      data: {
+        matches: matches.rows,
+        pagination: {
+          page,
+          limit,
+          total: parseInt(totalCount.rows[0]?.count || 0),
+          totalPages: Math.ceil((totalCount.rows[0]?.count || 0) / limit)
+        }
+      }
+    });
+    
+  } catch (error) {
+    console.error('Ошибка получения истории боев:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+console.log('✅ PvP API endpoints initialized');
+
+
+
+
 
 // ========== ОБРАБОТКА ОШИБОК ==========
 
