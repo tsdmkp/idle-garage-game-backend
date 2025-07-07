@@ -1644,6 +1644,14 @@ app.post('/api/pvp/challenge', async (req, res) => {
     const { userId, opponentId, message } = req.body;
     const finalUserId = userId || req.userId || 'default';
     
+console.log('🔍 PvP Challenge Debug:', {
+      userId: finalUserId,
+      opponentId,
+      timestamp: new Date().toISOString(),
+      userAgent: req.get('User-Agent'),
+      headers: req.headers
+    });
+
     if (!opponentId) {
       return res.status(400).json({ error: 'Не указан соперник' });
     }
