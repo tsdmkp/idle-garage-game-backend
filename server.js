@@ -308,30 +308,32 @@ const initializeDatabase = async () => {
         ON users(fuel_refill_time) 
         WHERE fuel_refill_time IS NOT NULL
       `);
-    } catch (indexErr) {
-      console.log('ℹ️ Could not create fuel index:', indexErr.message);
-    
-    // Создаем таблицу уведомлений
-await pool.query(`
-  CREATE TABLE IF NOT EXISTS user_notifications (
-    id SERIAL PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    type VARCHAR(50) NOT NULL,
-    title VARCHAR(200) NOT NULL,
-    message TEXT NOT NULL,
-    data JSONB,
-    is_read BOOLEAN DEFAULT FALSE,
-    created_at TIMESTAMP DEFAULT NOW()
-  )
-`);
+   } catch (indexErr) {
+  console.log('ℹ️ Could not create fuel index:', indexErr.message);
+}
 
-// Создаем индекс для быстрого поиска
-await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON user_notifications(user_id, is_read)`);
+try {
+  // Создаем таблицу уведомлений
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS user_notifications (
+      id SERIAL PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type VARCHAR(50) NOT NULL,
+      title VARCHAR(200) NOT NULL,
+      message TEXT NOT NULL,
+      data JSONB,
+      is_read BOOLEAN DEFAULT FALSE,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
 
-console.log('✅ Notifications table initialized');
-    
-    
-    }
+  // Создаем индекс для быстрого поиска
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON user_notifications(user_id, is_read)`);
+
+  console.log('✅ Notifications table initialized');
+} catch (notificationErr) {
+  console.log('ℹ️ Could not create notifications table:', notificationErr.message);
+}
     
     // Обновляем существующих пользователей (устанавливаем полный бак)
     await pool.query(`UPDATE users SET fuel_count = 5 WHERE fuel_count IS NULL`);
