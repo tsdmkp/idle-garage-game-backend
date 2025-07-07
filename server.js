@@ -310,6 +310,27 @@ const initializeDatabase = async () => {
       `);
     } catch (indexErr) {
       console.log('ℹ️ Could not create fuel index:', indexErr.message);
+    
+    // Создаем таблицу уведомлений
+await pool.query(`
+  CREATE TABLE IF NOT EXISTS user_notifications (
+    id SERIAL PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    type VARCHAR(50) NOT NULL,
+    title VARCHAR(200) NOT NULL,
+    message TEXT NOT NULL,
+    data JSONB,
+    is_read BOOLEAN DEFAULT FALSE,
+    created_at TIMESTAMP DEFAULT NOW()
+  )
+`);
+
+// Создаем индекс для быстрого поиска
+await pool.query(`CREATE INDEX IF NOT EXISTS idx_notifications_user_read ON user_notifications(user_id, is_read)`);
+
+console.log('✅ Notifications table initialized');
+    
+    
     }
     
     // Обновляем существующих пользователей (устанавливаем полный бак)
@@ -1829,6 +1850,32 @@ app.post('/api/pvp/challenge', async (req, res) => {
   await updatePvPStats(finalUserId, isPlayerWinner);
   await updatePvPStats(opponentId, !isPlayerWinner);
   
+// 🔔 Создаем уведомление для соперника
+const opponentWon = !isPlayerWinner;
+const notificationTitle = opponentWon ? '🏆 Победа в PvP!' : '💔 Поражение в PvP';
+const notificationMessage = `Игрок ${user.first_name || 'Неизвестный'} вызвал вас на дуэль. ${opponentWon ? 'Вы победили' : 'Вы проиграли'}! Получено: ${opponentReward} монет.`;
+
+await pool.query(`
+  INSERT INTO user_notifications (user_id, type, title, message, data)
+  VALUES ($1, $2, $3, $4, $5)
+`, [
+  opponentId, 
+  'pvp_battle', 
+  notificationTitle, 
+  notificationMessage,
+  JSON.stringify({
+    opponent_name: user.first_name || 'Неизвестный',
+    opponent_id: finalUserId,
+    won: opponentWon,
+    reward: opponentReward,
+    match_id: challenge.rows[0].challenge_id
+  })
+]);
+
+console.log(`🔔 Уведомление создано для игрока ${opponentId}`);
+
+
+
   // Завершаем вызов
   await pool.query(`
     UPDATE pvp_challenges SET status = 'completed', completed_at = NOW()
@@ -1959,7 +2006,75 @@ app.get('/api/pvp/match-history', async (req, res) => {
 
 console.log('✅ PvP API endpoints initialized');
 
+// В server.js добавить ПЕРЕД middleware для 404:
 
+// 🔔 API для уведомлений
+app.get('/api/notifications', async (req, res) => {
+  try {
+    const userId = req.query.userId || req.userId || 'default';
+    
+    // Получаем непрочитанные уведомления
+    const notifications = await pool.query(`
+      SELECT id, type, title, message, data, created_at
+      FROM user_notifications 
+      WHERE user_id = $1 AND is_read = FALSE
+      ORDER BY created_at DESC
+      LIMIT 10
+    `, [userId]);
+    
+    console.log(`🔔 Найдено уведомлений для ${userId}: ${notifications.rows.length}`);
+    
+    res.json({
+      success: true,
+      notifications: notifications.rows,
+      count: notifications.rows.length
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка получения уведомлений:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to get notifications' 
+    });
+  }
+});
+
+// Отметить уведомления как прочитанные
+app.post('/api/notifications/mark-read', async (req, res) => {
+  try {
+    const { userId, notificationIds } = req.body;
+    const finalUserId = userId || req.userId || 'default';
+    
+    if (notificationIds && notificationIds.length > 0) {
+      // Отмечаем конкретные уведомления
+      await pool.query(`
+        UPDATE user_notifications 
+        SET is_read = TRUE 
+        WHERE user_id = $1 AND id = ANY($2)
+      `, [finalUserId, notificationIds]);
+    } else {
+      // Отмечаем все уведомления пользователя
+      await pool.query(`
+        UPDATE user_notifications 
+        SET is_read = TRUE 
+        WHERE user_id = $1 AND is_read = FALSE
+      `, [finalUserId]);
+    }
+    
+    console.log(`✅ Уведомления отмечены как прочитанные для ${finalUserId}`);
+    
+    res.json({ success: true });
+    
+  } catch (error) {
+    console.error('❌ Ошибка отметки уведомлений:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Failed to mark notifications as read' 
+    });
+  }
+});
+
+console.log('🔔 Notifications API endpoints added');
 
 
 
