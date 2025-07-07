@@ -1760,9 +1760,95 @@ app.post('/api/pvp/challenge', async (req, res) => {
       });
       
     } else {
-      // Реальный игрок - пока не реализовано
-      res.status(400).json({ error: 'PvP с реальными игроками пока не доступно' });
+  // 👥 АВТОБОЙ С РЕАЛЬНЫМ ИГРОКОМ (упрощенная версия)
+  console.log(`👥 Бой с реальным игроком: ${opponentId}`);
+  
+  // Получаем данные соперника
+  const opponentResult = await pool.query(
+    'SELECT user_id, first_name, player_cars, selected_car_id FROM users WHERE user_id = $1',
+    [opponentId]
+  );
+  
+  if (opponentResult.rows.length === 0) {
+    // Возвращаем монеты
+    await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [entryFee, finalUserId]);
+    return res.status(400).json({ error: 'Игрок не найден' });
+  }
+  
+  const opponent = opponentResult.rows[0];
+  const opponentCars = opponent.player_cars || [];
+  const opponentCar = opponentCars.find(car => car.id === opponent.selected_car_id) || opponentCars[0];
+  
+  if (!opponentCar) {
+    await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [entryFee, finalUserId]);
+    return res.status(400).json({ error: 'У соперника нет машины' });
+  }
+  
+  // Создаем вызов
+  const challenge = await pool.query(`
+    INSERT INTO pvp_challenges (
+      from_user_id, to_user_id, league, entry_fee, from_car_power, to_car_power
+    ) VALUES ($1, $2, $3, $4, $5, $6)
+    RETURNING *
+  `, [finalUserId, opponentId, playerLeague, entryFee, playerPower, calculateCarScore(opponentCar)]);
+  
+  // Автоматический бой
+  const battleResult = calculateBattleResult(currentCar, opponentCar);
+  const league = LEAGUES[playerLeague];
+  
+  const isPlayerWinner = battleResult.winner === 'attacker';
+  const playerReward = isPlayerWinner ? league.rewards.win : league.rewards.lose;
+  const opponentReward = isPlayerWinner ? league.rewards.lose : league.rewards.win;
+  
+  // Записываем матч
+  await pool.query(`
+    INSERT INTO pvp_matches (
+      challenge_id, attacker_id, defender_id, league,
+      attacker_car_power, defender_car_power,
+      attacker_car_name, defender_car_name,
+      winner, attacker_reward, defender_reward,
+      attacker_score, defender_score, battle_details
+    ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+  `, [
+    challenge.rows[0].challenge_id, finalUserId, opponentId, playerLeague,
+    playerPower, calculateCarScore(opponentCar),
+    currentCar.name, opponentCar.name,
+    battleResult.winner, playerReward, opponentReward,
+    battleResult.attackerScore, battleResult.defenderScore,
+    JSON.stringify(battleResult)
+  ]);
+  
+  // Выдаем награды
+  await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [playerReward, finalUserId]);
+  await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [opponentReward, opponentId]);
+  
+  // Тратим топливо
+  await pool.query('UPDATE users SET fuel_count = fuel_count - 1 WHERE user_id = $1', [finalUserId]);
+  
+  // Обновляем статистику
+  await updatePvPStats(finalUserId, isPlayerWinner);
+  await updatePvPStats(opponentId, !isPlayerWinner);
+  
+  // Завершаем вызов
+  await pool.query(`
+    UPDATE pvp_challenges SET status = 'completed', completed_at = NOW()
+    WHERE challenge_id = $1
+  `, [challenge.rows[0].challenge_id]);
+  
+  res.json({
+    success: true,
+    data: {
+      matchResult: {
+        winner: battleResult.winner,
+        yourResult: isPlayerWinner ? 'win' : 'lose',
+        yourReward: playerReward,
+        opponentName: opponent.first_name || 'Игрок',
+        battleDetails: battleResult,
+        isRealPlayer: true // 🎮 ЭТО БЫЛ РЕАЛЬНЫЙ ИГРОК!
+      }
     }
+  });
+}
     
   } catch (error) {
     console.error('Ошибка создания вызова:', error);
