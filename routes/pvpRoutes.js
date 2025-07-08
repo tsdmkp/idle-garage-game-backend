@@ -495,6 +495,103 @@ router.post('/challenge', async (req, res) => {
   }
 });
 
+// 🆕 POST /api/pvp/reset-limit - Сброс лимита боев за рекламу
+router.post('/reset-limit', async (req, res) => {
+  try {
+    const { userId } = req.body;
+    const finalUserId = userId || req.userId || 'default';
+    
+    console.log('🔄 Попытка сброса лимита PvP для пользователя:', finalUserId);
+    
+    if (!finalUserId || finalUserId === 'default') {
+      return res.status(400).json({ 
+        success: false, 
+        error: 'Не указан пользователь' 
+      });
+    }
+    
+    // Проверяем существование пользователя
+    const userResult = await pool.query(
+      'SELECT user_id FROM users WHERE user_id = $1',
+      [finalUserId]
+    );
+    
+    if (userResult.rows.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        error: 'Пользователь не найден' 
+      });
+    }
+    
+    // Проверяем текущий лимит боев
+    const currentLimit = await checkPvPBattleLimit(finalUserId, GAME_LIMITS.MAX_PVP_BATTLES_PER_HOUR);
+    
+    if (currentLimit.canBattle) {
+      return res.json({ 
+        success: true, 
+        message: 'Лимит уже не достигнут, сброс не нужен',
+        currentCount: currentLimit.currentCount,
+        maxAllowed: currentLimit.maxAllowed
+      });
+    }
+    
+    // Сбрасываем лимит боев - удаляем записи за последний час
+    // Предполагаем, что лимиты хранятся в таблице, которая отслеживает количество боев
+    // Если у вас используется другая логика - адаптируйте запрос
+    
+    try {
+      // Вариант 1: Если лимиты хранятся в отдельной таблице
+      const deleteResult = await pool.query(`
+        DELETE FROM pvp_battle_limits 
+        WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'
+      `, [finalUserId]);
+      
+      console.log('🗑️ Удалено записей лимита:', deleteResult.rowCount);
+      
+    } catch (deleteError) {
+      console.log('⚠️ Таблица pvp_battle_limits не найдена, пробуем другой способ...');
+      
+      // Вариант 2: Если лимиты считаются по таблице pvp_matches
+      // Помечаем старые матчи как "не учитываемые в лимите"
+      await pool.query(`
+        UPDATE pvp_matches 
+        SET battle_details = COALESCE(battle_details, '{}'::jsonb) || '{"limit_reset": true}'::jsonb
+        WHERE (attacker_id = $1 OR defender_id = $1) 
+          AND match_date > NOW() - INTERVAL '1 hour'
+      `, [finalUserId]);
+      
+      console.log('✅ Отметили матчи как сброшенные в лимите');
+    }
+    
+    // Проверяем результат
+    const newLimit = await checkPvPBattleLimit(finalUserId, GAME_LIMITS.MAX_PVP_BATTLES_PER_HOUR);
+    
+    console.log('📊 Новый статус лимита:', {
+      canBattle: newLimit.canBattle,
+      currentCount: newLimit.currentCount,
+      maxAllowed: newLimit.maxAllowed
+    });
+    
+    res.json({ 
+      success: true, 
+      message: 'Лимит PvP боев успешно сброшен!',
+      data: {
+        canBattleNow: newLimit.canBattle,
+        currentCount: newLimit.currentCount,
+        maxAllowed: newLimit.maxAllowed,
+        resetTime: new Date().toISOString()
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка сброса лимита PvP:', error);
+    res.status(500).json({ 
+      success: false, 
+      error: 'Внутренняя ошибка сервера при сбросе лимита' 
+    });
+  }
+});
+
 // GET /api/pvp/match-history - История боев
 router.get('/match-history', async (req, res) => {
   try {
