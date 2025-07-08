@@ -499,7 +499,7 @@ router.post('/challenge', async (req, res) => {
   }
 });
 
-// 🔧 ИСПРАВЛЕННЫЙ ЭНДПОИНТ: POST /api/pvp/reset-limit - Сброс лимита боев за рекламу
+// 🔧 ОКОНЧАТЕЛЬНО ИСПРАВЛЕННЫЙ ЭНДПОИНТ: POST /api/pvp/reset-limit
 router.post('/reset-limit', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -544,7 +544,7 @@ router.post('/reset-limit', async (req, res) => {
       });
     }
     
-    // 🔧 ИСПРАВЛЕНО: Помечаем матчи за последний час как "сброшенные"
+    // Помечаем матчи за последний час как "сброшенные"
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     
     const updateResult = await pool.query(`
@@ -560,20 +560,36 @@ router.post('/reset-limit', async (req, res) => {
       RETURNING match_id, attacker_id, defender_id, match_date
     `, [finalUserId, oneHourAgo, new Date().toISOString()]);
     
-    console.log(`✅ Помечено ${updateResult.rowCount} матчей как сброшенные:`, 
-      updateResult.rows.map(r => ({ id: r.match_id, date: r.match_date }))
-    );
+    console.log(`✅ Помечено ${updateResult.rowCount} матчей как сброшенные`);
     
     // Проверяем результат
     const newLimit = await checkPvPBattleLimit(finalUserId, GAME_LIMITS.MAX_PVP_BATTLES_PER_HOUR);
     
     console.log('📊 Новый статус лимита после сброса:', newLimit);
     
-    // 📝 Логируем сброс лимита для статистики
-    await pool.query(`
-      INSERT INTO adsgram_rewards (user_id, reward_type, reward_coins, block_id)
-      VALUES ($1, 'pvp_limit_reset', 0, 'limit_reset_' || $2)
-    `, [finalUserId, Date.now()]);
+    // 🔧 ЗАЩИЩЕННАЯ ЗАПИСЬ В ADSGRAM - проверяем существование таблицы
+    try {
+      // Проверяем, существует ли таблица adsgram_rewards
+      const tableCheck = await pool.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_name = 'adsgram_rewards'
+        );
+      `);
+      
+      if (tableCheck.rows[0].exists) {
+        await pool.query(`
+          INSERT INTO adsgram_rewards (user_id, reward_type, reward_coins, block_id)
+          VALUES ($1, 'pvp_limit_reset', 0, 'limit_reset_' || $2)
+        `, [finalUserId, Date.now()]);
+        console.log('📝 Сброс лимита записан в adsgram_rewards');
+      } else {
+        console.log('⚠️ Таблица adsgram_rewards не существует, пропускаем запись');
+      }
+    } catch (adsgramError) {
+      console.log('⚠️ Ошибка записи в adsgram_rewards (продолжаем без неё):', adsgramError.message);
+      // НЕ прерываем выполнение - это не критичная ошибка
+    }
     
     res.json({ 
       success: true, 
@@ -588,10 +604,17 @@ router.post('/reset-limit', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('❌ Ошибка сброса лимита PvP:', error);
+    console.error('❌ КРИТИЧЕСКАЯ ОШИБКА сброса лимита PvP:', {
+      message: error.message,
+      stack: error.stack,
+      userId: req.body?.userId,
+      timestamp: new Date().toISOString()
+    });
+    
     res.status(500).json({ 
       success: false, 
-      error: 'Внутренняя ошибка сервера при сбросе лимита' 
+      error: 'Внутренняя ошибка сервера при сбросе лимита',
+      debug: error.message // Показываем детали ошибки для отладки
     });
   }
 });
