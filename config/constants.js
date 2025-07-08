@@ -65,7 +65,7 @@ const GAME_LIMITS = {
   UPDATE_INTERVAL: 1000,
   
   // PvP лимиты
-  MAX_PVP_BATTLES_PER_HOUR: 10,
+  MAX_PVP_BATTLES_PER_HOUR: 20,
   
   // Adsgram лимиты
   MAX_ADSGRAM_REWARDS_PER_HOUR: 20
