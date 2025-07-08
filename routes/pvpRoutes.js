@@ -499,7 +499,7 @@ router.post('/challenge', async (req, res) => {
   }
 });
 
-// 🔧 ОКОНЧАТЕЛЬНО ИСПРАВЛЕННЫЙ ЭНДПОИНТ: POST /api/pvp/reset-limit
+/// 🔧 ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ ЭНДПОИНТ: POST /api/pvp/reset-limit
 router.post('/reset-limit', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -546,10 +546,17 @@ router.post('/reset-limit', async (req, res) => {
     
     // Помечаем матчи за последний час как "сброшенные"
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    const resetTime = new Date().toISOString();
+    
+    // 🔧 ИСПРАВЛЕННЫЙ SQL-ЗАПРОС: создаем JSON объект правильно
+    const resetData = JSON.stringify({
+      limit_reset: true,
+      reset_time: resetTime
+    });
     
     const updateResult = await pool.query(`
       UPDATE pvp_matches 
-      SET battle_details = COALESCE(battle_details, '{}'::jsonb) || '{"limit_reset": true, "reset_time": $3}'::jsonb
+      SET battle_details = COALESCE(battle_details, '{}'::jsonb) || $3::jsonb
       WHERE (attacker_id = $1 OR defender_id = $1) 
         AND match_date > $2
         AND (
@@ -558,7 +565,7 @@ router.post('/reset-limit', async (req, res) => {
           OR battle_details->>'limit_reset' != 'true'
         )
       RETURNING match_id, attacker_id, defender_id, match_date
-    `, [finalUserId, oneHourAgo, new Date().toISOString()]);
+    `, [finalUserId, oneHourAgo, resetData]);
     
     console.log(`✅ Помечено ${updateResult.rowCount} матчей как сброшенные`);
     
@@ -567,9 +574,8 @@ router.post('/reset-limit', async (req, res) => {
     
     console.log('📊 Новый статус лимита после сброса:', newLimit);
     
-    // 🔧 ЗАЩИЩЕННАЯ ЗАПИСЬ В ADSGRAM - проверяем существование таблицы
+    // 🔧 ЗАЩИЩЕННАЯ ЗАПИСЬ В ADSGRAM
     try {
-      // Проверяем, существует ли таблица adsgram_rewards
       const tableCheck = await pool.query(`
         SELECT EXISTS (
           SELECT FROM information_schema.tables 
@@ -587,8 +593,7 @@ router.post('/reset-limit', async (req, res) => {
         console.log('⚠️ Таблица adsgram_rewards не существует, пропускаем запись');
       }
     } catch (adsgramError) {
-      console.log('⚠️ Ошибка записи в adsgram_rewards (продолжаем без неё):', adsgramError.message);
-      // НЕ прерываем выполнение - это не критичная ошибка
+      console.log('⚠️ Ошибка записи в adsgram_rewards:', adsgramError.message);
     }
     
     res.json({ 
@@ -598,7 +603,7 @@ router.post('/reset-limit', async (req, res) => {
         canBattleNow: newLimit.canBattle,
         currentCount: newLimit.currentCount,
         maxAllowed: newLimit.maxAllowed,
-        resetTime: new Date().toISOString(),
+        resetTime: resetTime,
         matchesReset: updateResult.rowCount
       }
     });
@@ -614,7 +619,7 @@ router.post('/reset-limit', async (req, res) => {
     res.status(500).json({ 
       success: false, 
       error: 'Внутренняя ошибка сервера при сбросе лимита',
-      debug: error.message // Показываем детали ошибки для отладки
+      debug: error.message
     });
   }
 });
