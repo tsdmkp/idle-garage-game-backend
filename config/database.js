@@ -143,9 +143,28 @@ const initializeDatabase = async () => {
 
       console.log('✅ Notifications table initialized');
     } catch (notificationErr) {
+      
       console.log('ℹ️ Could not create notifications table:', notificationErr.message);
     }
     
+try {
+      await pool.query(`
+        ALTER TABLE user_notifications 
+        ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()
+      `);
+      
+      await pool.query(`
+        UPDATE user_notifications 
+        SET updated_at = created_at 
+        WHERE updated_at IS NULL
+      `);
+      
+      console.log('✅ Notifications table updated with updated_at column');
+    } catch (notificationUpdateErr) {
+      console.log('ℹ️ Could not update notifications table:', notificationUpdateErr.message);
+    }
+
+
     // 6. ОБНОВЛЕНИЕ СУЩЕСТВУЮЩИХ ПОЛЬЗОВАТЕЛЕЙ
     await pool.query(`UPDATE users SET fuel_count = 5 WHERE fuel_count IS NULL`);
     

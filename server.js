@@ -16,6 +16,9 @@ const {
 // === ИМПОРТ МАРШРУТОВ ===
 const gameRoutes = require('./routes/gameRoutes');
 const pvpRoutes = require('./routes/pvpRoutes');
+const notificationRoutes = require('./routes/notificationRoutes'); // 🆕 ДОБАВЛЕНО
+
+
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -111,6 +114,7 @@ app.use(cors({
 // === МАРШРУТЫ ===
 app.use('/api', gameRoutes);
 app.use('/api/pvp', pvpRoutes);
+app.use('/api/notifications', notificationRoutes); // 🆕 ДОБАВЛЕНО
 
 // === ОСТАВШИЕСЯ СПЕЦИФИЧНЫЕ ЭНДПОИНТЫ ===
 
