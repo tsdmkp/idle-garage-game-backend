@@ -11,8 +11,12 @@ const {
   calculateCarScore,
   calculateBattleResult,
   updatePvPStats,
-  checkPvPBattleLimit
+  checkPvPBattleLimit,
+  cleanupOldResetFlags
 } = require('../utils/gameLogic');
+
+// Запускаем очистку старых флагов каждый час
+setInterval(cleanupOldResetFlags, 60 * 60 * 1000);
 
 // === PvP API ЭНДПОИНТЫ ===
 
@@ -242,7 +246,7 @@ router.post('/challenge', async (req, res) => {
     const battleLimit = await checkPvPBattleLimit(finalUserId, GAME_LIMITS.MAX_PVP_BATTLES_PER_HOUR);
     if (!battleLimit.canBattle) {
       return res.status(429).json({ 
-        error: `Слишком много боев за час (${battleLimit.currentCount}/${battleLimit.maxAllowed}). Попробуйте позже.`
+        error: `Слишком много боев за час (${battleLimit.currentCount}/${battleLimit.maxAllowed}). Попробуйте позже или посмотрите рекламу.`
       });
     }
     
@@ -495,7 +499,7 @@ router.post('/challenge', async (req, res) => {
   }
 });
 
-// 🆕 POST /api/pvp/reset-limit - Сброс лимита боев за рекламу
+// 🔧 ИСПРАВЛЕННЫЙ ЭНДПОИНТ: POST /api/pvp/reset-limit - Сброс лимита боев за рекламу
 router.post('/reset-limit', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -512,7 +516,7 @@ router.post('/reset-limit', async (req, res) => {
     
     // Проверяем существование пользователя
     const userResult = await pool.query(
-      'SELECT user_id FROM users WHERE user_id = $1',
+      'SELECT user_id, first_name FROM users WHERE user_id = $1',
       [finalUserId]
     );
     
@@ -526,51 +530,50 @@ router.post('/reset-limit', async (req, res) => {
     // Проверяем текущий лимит боев
     const currentLimit = await checkPvPBattleLimit(finalUserId, GAME_LIMITS.MAX_PVP_BATTLES_PER_HOUR);
     
+    console.log('📊 Текущий статус лимита:', currentLimit);
+    
     if (currentLimit.canBattle) {
       return res.json({ 
         success: true, 
         message: 'Лимит уже не достигнут, сброс не нужен',
-        currentCount: currentLimit.currentCount,
-        maxAllowed: currentLimit.maxAllowed
+        data: {
+          currentCount: currentLimit.currentCount,
+          maxAllowed: currentLimit.maxAllowed,
+          canBattle: true
+        }
       });
     }
     
-    // Сбрасываем лимит боев - удаляем записи за последний час
-    // Предполагаем, что лимиты хранятся в таблице, которая отслеживает количество боев
-    // Если у вас используется другая логика - адаптируйте запрос
+    // 🔧 ИСПРАВЛЕНО: Помечаем матчи за последний час как "сброшенные"
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     
-    try {
-      // Вариант 1: Если лимиты хранятся в отдельной таблице
-      const deleteResult = await pool.query(`
-        DELETE FROM pvp_battle_limits 
-        WHERE user_id = $1 AND created_at > NOW() - INTERVAL '1 hour'
-      `, [finalUserId]);
-      
-      console.log('🗑️ Удалено записей лимита:', deleteResult.rowCount);
-      
-    } catch (deleteError) {
-      console.log('⚠️ Таблица pvp_battle_limits не найдена, пробуем другой способ...');
-      
-      // Вариант 2: Если лимиты считаются по таблице pvp_matches
-      // Помечаем старые матчи как "не учитываемые в лимите"
-      await pool.query(`
-        UPDATE pvp_matches 
-        SET battle_details = COALESCE(battle_details, '{}'::jsonb) || '{"limit_reset": true}'::jsonb
-        WHERE (attacker_id = $1 OR defender_id = $1) 
-          AND match_date > NOW() - INTERVAL '1 hour'
-      `, [finalUserId]);
-      
-      console.log('✅ Отметили матчи как сброшенные в лимите');
-    }
+    const updateResult = await pool.query(`
+      UPDATE pvp_matches 
+      SET battle_details = COALESCE(battle_details, '{}'::jsonb) || '{"limit_reset": true, "reset_time": $3}'::jsonb
+      WHERE (attacker_id = $1 OR defender_id = $1) 
+        AND match_date > $2
+        AND (
+          battle_details IS NULL 
+          OR battle_details->>'limit_reset' IS NULL 
+          OR battle_details->>'limit_reset' != 'true'
+        )
+      RETURNING match_id, attacker_id, defender_id, match_date
+    `, [finalUserId, oneHourAgo, new Date().toISOString()]);
+    
+    console.log(`✅ Помечено ${updateResult.rowCount} матчей как сброшенные:`, 
+      updateResult.rows.map(r => ({ id: r.match_id, date: r.match_date }))
+    );
     
     // Проверяем результат
     const newLimit = await checkPvPBattleLimit(finalUserId, GAME_LIMITS.MAX_PVP_BATTLES_PER_HOUR);
     
-    console.log('📊 Новый статус лимита:', {
-      canBattle: newLimit.canBattle,
-      currentCount: newLimit.currentCount,
-      maxAllowed: newLimit.maxAllowed
-    });
+    console.log('📊 Новый статус лимита после сброса:', newLimit);
+    
+    // 📝 Логируем сброс лимита для статистики
+    await pool.query(`
+      INSERT INTO adsgram_rewards (user_id, reward_type, reward_coins, block_id)
+      VALUES ($1, 'pvp_limit_reset', 0, 'limit_reset_' || $2)
+    `, [finalUserId, Date.now()]);
     
     res.json({ 
       success: true, 
@@ -579,7 +582,8 @@ router.post('/reset-limit', async (req, res) => {
         canBattleNow: newLimit.canBattle,
         currentCount: newLimit.currentCount,
         maxAllowed: newLimit.maxAllowed,
-        resetTime: new Date().toISOString()
+        resetTime: new Date().toISOString(),
+        matchesReset: updateResult.rowCount
       }
     });
     
@@ -589,6 +593,64 @@ router.post('/reset-limit', async (req, res) => {
       success: false, 
       error: 'Внутренняя ошибка сервера при сбросе лимита' 
     });
+  }
+});
+
+// 🆕 GET /api/pvp/debug-limit - Отладочный эндпоинт для проверки лимитов
+router.get('/debug-limit', async (req, res) => {
+  try {
+    const userId = req.query.userId || req.userId || 'default';
+    const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    
+    // Все матчи за час
+    const allMatches = await pool.query(`
+      SELECT 
+        match_id, 
+        attacker_id, 
+        defender_id, 
+        match_date, 
+        battle_details,
+        CASE 
+          WHEN attacker_id = $1 THEN 'attacker'
+          ELSE 'defender'
+        END as role
+      FROM pvp_matches 
+      WHERE (attacker_id = $1 OR defender_id = $1)
+      AND match_date > $2
+      ORDER BY match_date DESC
+    `, [userId, oneHourAgo]);
+    
+    // Только активные (не сброшенные)
+    const activeMatches = allMatches.rows.filter(match => 
+      !match.battle_details || 
+      !match.battle_details.limit_reset || 
+      match.battle_details.limit_reset !== 'true'
+    );
+    
+    const currentLimit = await checkPvPBattleLimit(userId, GAME_LIMITS.MAX_PVP_BATTLES_PER_HOUR);
+    
+    res.json({
+      success: true,
+      data: {
+        userId,
+        timeWindow: {
+          from: oneHourAgo.toISOString(),
+          to: new Date().toISOString()
+        },
+        matches: {
+          total: allMatches.rows.length,
+          active: activeMatches.length,
+          reset: allMatches.rows.length - activeMatches.length
+        },
+        limit: currentLimit,
+        allMatchesDetails: allMatches.rows,
+        activeMatchesDetails: activeMatches
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка отладки лимитов:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 

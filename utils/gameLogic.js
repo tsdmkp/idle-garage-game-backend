@@ -148,18 +148,32 @@ function calculateFuelRefillTime(lastRaceTime, hoursToRefill = 1) {
   return refillTime;
 }
 
-// Проверка лимитов PvP боев
+// 🔧 ИСПРАВЛЕННАЯ ФУНКЦИЯ: Проверка лимитов PvP боев (с учетом сброса через рекламу)
 async function checkPvPBattleLimit(userId, maxBattlesPerHour = 10) {
   try {
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+    
+    // 🔧 ИСПРАВЛЕНО: Учитываем сброс лимита через рекламу
     const recentBattles = await pool.query(`
       SELECT COUNT(*) as count 
       FROM pvp_matches 
       WHERE (attacker_id = $1 OR defender_id = $1)
       AND match_date > $2
+      AND (
+        battle_details IS NULL 
+        OR battle_details->>'limit_reset' IS NULL 
+        OR battle_details->>'limit_reset' != 'true'
+      )
     `, [userId, oneHourAgo]);
 
     const battleCount = parseInt(recentBattles.rows[0]?.count) || 0;
+    
+    console.log(`🔍 PvP Limit Check for ${userId}:`, {
+      battleCount,
+      maxAllowed: maxBattlesPerHour,
+      canBattle: battleCount < maxBattlesPerHour,
+      timeWindow: `${oneHourAgo.toISOString()} - ${new Date().toISOString()}`
+    });
     
     return {
       canBattle: battleCount < maxBattlesPerHour,
@@ -173,6 +187,28 @@ async function checkPvPBattleLimit(userId, maxBattlesPerHour = 10) {
   }
 }
 
+// 🆕 ФУНКЦИЯ АВТОМАТИЧЕСКОЙ ОЧИСТКИ СТАРЫХ ФЛАГОВ
+async function cleanupOldResetFlags() {
+  try {
+    const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    
+    const result = await pool.query(`
+      UPDATE pvp_matches 
+      SET battle_details = battle_details - 'limit_reset' - 'reset_time'
+      WHERE match_date < $1 
+        AND battle_details ? 'limit_reset'
+      RETURNING match_id
+    `, [twoHoursAgo]);
+    
+    if (result.rowCount > 0) {
+      console.log(`🧹 Очищено ${result.rowCount} старых флагов сброса лимита`);
+    }
+    
+  } catch (error) {
+    console.error('❌ Ошибка очистки старых флагов:', error);
+  }
+}
+
 // Экспорт всех функций
 module.exports = {
   getLeagueByPower,
@@ -182,5 +218,6 @@ module.exports = {
   formatNumber,
   isValidCar,
   calculateFuelRefillTime,
-  checkPvPBattleLimit
+  checkPvPBattleLimit,
+  cleanupOldResetFlags
 };

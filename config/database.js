@@ -360,3 +360,49 @@ module.exports = {
   initializeAdsgramDatabase,
   gracefulShutdown
 };
+
+// ДОПОЛНЕНИЕ К config/database.js - добавьте эту функцию в конец файла
+
+// === ФУНКЦИЯ АВТОМАТИЧЕСКОЙ ОЧИСТКИ СТАРЫХ ФЛАГОВ СБРОСА ===
+const setupPvPCleanup = () => {
+  // Функция очистки старых флагов сброса лимитов
+  const cleanupOldResetFlags = async () => {
+    try {
+      const twoHoursAgo = new Date(Date.now() - 2 * 60 * 60 * 1000);
+      
+      const result = await pool.query(`
+        UPDATE pvp_matches 
+        SET battle_details = battle_details - 'limit_reset' - 'reset_time'
+        WHERE match_date < $1 
+          AND battle_details ? 'limit_reset'
+        RETURNING match_id
+      `, [twoHoursAgo]);
+      
+      if (result.rowCount > 0) {
+        console.log(`🧹 Очищено ${result.rowCount} старых флагов сброса лимита`);
+      }
+      
+    } catch (error) {
+      console.error('❌ Ошибка очистки старых флагов:', error);
+    }
+  };
+
+  // Запускаем очистку каждый час
+  setInterval(cleanupOldResetFlags, 60 * 60 * 1000);
+  
+  // Запускаем первую очистку через 5 минут после старта
+  setTimeout(cleanupOldResetFlags, 5 * 60 * 1000);
+  
+  console.log('🔄 PvP cleanup scheduler initialized');
+};
+
+// === ОБНОВЛЕННЫЙ ЭКСПОРТ ===
+module.exports = {
+  pool,
+  checkAndRestoreFuel,
+  initializeDatabase,
+  initializeFriendsDatabase,
+  initializeAdsgramDatabase,
+  gracefulShutdown,
+  setupPvPCleanup  // 🆕 ДОБАВЛЕНО
+};
