@@ -32,44 +32,128 @@ function calculateCarScore(car) {
   return power + speed + style + reliability;
 }
 
-// === РАСЧЕТ РЕЗУЛЬТАТА БОЯ ===
+// === РАСЧЕТ РЕЗУЛЬТАТА ГОНКИ ===
 function calculateBattleResult(attackerCar, defenderCar) {
+  console.log('🏁 Начинаем гонку:', {
+    racer1: attackerCar.name,
+    racer1Power: attackerCar.power,
+    racer2: defenderCar.name,
+    racer2Power: defenderCar.power
+  });
+
+  // НОВЫЙ УСИЛЕННЫЙ RNG - разброс ±40% вместо ±20%
+  const racer1Multiplier = Math.random() * 0.8 + 0.6; // 0.6 - 1.4 (было 0.8-1.2)
+  const racer2Multiplier = Math.random() * 0.8 + 0.6; // 0.6 - 1.4 (было 0.8-1.2)
+
+  console.log('🎲 Условия гонки:', {
+    racer1: racer1Multiplier.toFixed(2),
+    racer2: racer2Multiplier.toFixed(2)
+  });
+
+  // УВЕЛИЧЕННЫЙ шанс везения с 10% до 20%
+  const racer1Lucky = Math.random() < 0.2; // 20% вместо 10%
+  const racer2Lucky = Math.random() < 0.2; // 20% вместо 10%
+
+  console.log('🍀 Удачные моменты:', {
+    racer1Lucky,
+    racer2Lucky
+  });
+
+  // НОВЫЕ ГОНОЧНЫЕ СОБЫТИЯ
+  const racer1PerfectStart = Math.random() < 0.05; // 5% шанс на идеальный старт
+  const racer1Crash = Math.random() < 0.05;        // 5% шанс на занос
+  const racer2PerfectStart = Math.random() < 0.05; // 5% шанс на идеальный старт
+  const racer2Crash = Math.random() < 0.05;        // 5% шанс на занос
+
+  console.log('🏎️ Гоночные события:', {
+    racer1PerfectStart,
+    racer1Crash,
+    racer2PerfectStart,
+    racer2Crash
+  });
+
+  // Используем функцию calculateCarScore для получения мощности
   const attackerBasePower = calculateCarScore(attackerCar);
   const defenderBasePower = calculateCarScore(defenderCar);
+
+  // Базовые результаты
+  let racer1Score = attackerBasePower * racer1Multiplier;
+  let racer2Score = defenderBasePower * racer2Multiplier;
+
+  // Применяем удачу (попутный ветер +30%)
+  if (racer1Lucky) {
+    racer1Score *= 1.3;
+    console.log('🍀 Первый гонщик поймал попутный ветер! +30%');
+  }
   
-  // 🎲 УЛУЧШЕННАЯ ФОРМУЛА БОЯ С БОЛЬШЕЙ СЛУЧАЙНОСТЬЮ
-  // Базовый разброс ±20% вместо ±10%
-  const attackerMultiplier = 0.8 + Math.random() * 0.4; // от 0.8 до 1.2
-  const defenderMultiplier = 0.8 + Math.random() * 0.4; // от 0.8 до 1.2
+  if (racer2Lucky) {
+    racer2Score *= 1.3;
+    console.log('🍀 Второй гонщик поймал попутный ветер! +30%');
+  }
+
+  // НОВАЯ ЛОГИКА: Применяем гоночные события
+  if (racer1PerfectStart && !racer1Crash) {
+    racer1Score *= 2.0; // Идеальный старт x2
+    console.log('🚀 Идеальный старт первого гонщика! x2 скорость');
+  } else if (racer1Crash) {
+    racer1Score *= 0.5; // Занос -50%
+    console.log('💥 Первый гонщик занесло на повороте! -50% скорость');
+  }
+
+  if (racer2PerfectStart && !racer2Crash) {
+    racer2Score *= 2.0; // Идеальный старт x2
+    console.log('🚀 Идеальный старт второго гонщика! x2 скорость');
+  } else if (racer2Crash) {
+    racer2Score *= 0.5; // Занос -50%
+    console.log('💥 Второго гонщика занесло на повороте! -50% скорость');
+  }
+
+  // Округляем итоговые очки
+  racer1Score = Math.round(racer1Score);
+  racer2Score = Math.round(racer2Score);
+
+  // Определяем победителя (сохраняем совместимость с существующим кодом)
+  const attackerWins = racer1Score > racer2Score;
+  const winner = attackerWins ? 'attacker' : 'defender';
   
-  // 🎯 ДОБАВЛЯЕМ ФАКТОР "ВЕЗЕНИЯ" - дополнительный шанс на победу
-  const luckFactor = Math.random();
-  const attackerLuck = luckFactor < 0.1 ? 1.3 : 1.0; // 10% шанс на удачу (+30%)
-  const defenderLuck = luckFactor > 0.9 ? 1.3 : 1.0; // 10% шанс на удачу (+30%)
-  
-  const attackerScore = attackerBasePower * attackerMultiplier * attackerLuck;
-  const defenderScore = defenderBasePower * defenderMultiplier * defenderLuck;
-  
-  // 🏆 ОПРЕДЕЛЯЕМ ПОБЕДИТЕЛЯ
-  const winner = attackerScore > defenderScore ? 'attacker' : 'defender';
-  
-  console.log('🥊 Результат боя:', {
-    attackerPower: attackerBasePower,
-    defenderPower: defenderBasePower,
-    attackerFinalScore: Math.round(attackerScore),
-    defenderFinalScore: Math.round(defenderScore),
-    winner,
-    attackerLuck: attackerLuck > 1 ? 'ВЕЗЕНИЕ!' : 'норма',
-    defenderLuck: defenderLuck > 1 ? 'ВЕЗЕНИЕ!' : 'норма'
+  console.log('🏁 Результат гонки:', {
+    racer1FinalScore: racer1Score,
+    racer2FinalScore: racer2Score,
+    winner: attackerWins ? 'racer1' : 'racer2'
   });
-  
+
+  // Создаем детальный отчет о гонке
+  const raceReport = {
+    racer1: {
+      basePower: attackerBasePower,
+      multiplier: racer1Multiplier.toFixed(2),
+      lucky: racer1Lucky,
+      perfectStart: racer1PerfectStart,
+      crash: racer1Crash,
+      finalScore: racer1Score
+    },
+    racer2: {
+      basePower: defenderBasePower,
+      multiplier: racer2Multiplier.toFixed(2),
+      lucky: racer2Lucky,
+      perfectStart: racer2PerfectStart,
+      crash: racer2Crash,
+      finalScore: racer2Score
+    },
+    winner: attackerWins ? 'racer1' : 'racer2'
+  };
+
+  console.log('📊 Детальный отчет о гонке:', raceReport);
+
+  // Возвращаем в том же формате, что ожидает остальной код
   return {
     winner,
-    attackerScore: Math.round(attackerScore * 100) / 100,
-    defenderScore: Math.round(defenderScore * 100) / 100,
-    margin: Math.abs(attackerScore - defenderScore),
-    attackerHadLuck: attackerLuck > 1,
-    defenderHadLuck: defenderLuck > 1
+    attackerScore: racer1Score,
+    defenderScore: racer2Score,
+    margin: Math.abs(racer1Score - racer2Score),
+    attackerHadLuck: racer1Lucky || racer1PerfectStart,
+    defenderHadLuck: racer2Lucky || racer2PerfectStart,
+    raceReport // Добавляем детальный отчет
   };
 }
 
@@ -209,6 +293,41 @@ async function cleanupOldResetFlags() {
   }
 }
 
+// ДОПОЛНИТЕЛЬНО: Функция для гоночного описания (если понадобится)
+function getRaceDescription(raceReport) {
+  const { racer1, racer2, winner } = raceReport;
+  
+  let description = [];
+  
+  // Описываем события первого гонщика
+  if (racer1.perfectStart) {
+    description.push('🚀 Идеальный старт!');
+  } else if (racer1.crash) {
+    description.push('💥 Занос на повороте!');
+  } else if (racer1.lucky) {
+    description.push('🍀 Попутный ветер!');
+  }
+  
+  // Описываем события второго гонщика
+  if (racer2.perfectStart) {
+    description.push('🚀 Соперник сделал идеальный старт!');
+  } else if (racer2.crash) {
+    description.push('💥 Соперника занесло!');
+  } else if (racer2.lucky) {
+    description.push('🍀 Сопернику повезло с ветром!');
+  }
+  
+  // Итоговый результат
+  const winnerName = winner === 'racer1' ? 'Вы' : 'Соперник';
+  description.push(`🏁 ${winnerName} финишируете первым! Время: ${
+    winner === 'racer1' ? 
+    `${racer1.finalScore} - ${racer2.finalScore}` :
+    `${racer2.finalScore} - ${racer1.finalScore}`
+  }`);
+  
+  return description.join(' ');
+}
+
 // Экспорт всех функций
 module.exports = {
   getLeagueByPower,
@@ -219,5 +338,6 @@ module.exports = {
   isValidCar,
   calculateFuelRefillTime,
   checkPvPBattleLimit,
-  cleanupOldResetFlags
+  cleanupOldResetFlags,
+  getRaceDescription
 };
