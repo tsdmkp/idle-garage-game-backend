@@ -13,7 +13,7 @@ function getLeagueByPower(carPower) {
   return 'BRONZE';
 }
 
-// === РАСЧЕТ МОЩНОСТИ МАШИНЫ ===
+// === РАСЧЕТ МОЩНОСТИ МАШИНЫ (СТАРАЯ СИСТЕМА) ===
 function calculateCarScore(car) {
   if (!car || !car.parts) return 0;
   
@@ -32,211 +32,381 @@ function calculateCarScore(car) {
   return power + speed + style + reliability;
 }
 
-// ✅ НОВАЯ ФУНКЦИЯ: Создание событий гонки НА СЕРВЕРЕ
-function createRaceEvents(racer1Events, racer2Events) {
+// === 🆕 НОВАЯ ДЕТАЛЬНАЯ СИСТЕМА РАСЧЕТА ===
+function calculateDetailedCarScore(car) {
+  if (!car || !car.parts) return { total: 0, breakdown: { power: 0, speed: 0, style: 0, reliability: 0 } };
+  
+  const base = BASE_CAR_STATS[car.id] || BASE_CAR_STATS['car_001'];
+  
+  const power = base.power + ((car.parts.engine?.level || 0) * 5);
+  const speed = base.speed + ((car.parts.tires?.level || 0) * 3);
+  const style = base.style + ((car.parts.style_body?.level || 0) * 4);
+  const reliability = base.reliability + ((car.parts.reliability_base?.level || 0) * 5);
+  
+  return {
+    total: power + speed + style + reliability,
+    breakdown: { power, speed, style, reliability }
+  };
+}
+
+// === 🆕 РАСЧЕТ ШАНСОВ СОБЫТИЙ ===
+function calculateEventChances(carParts, baseCar) {
+  const engineLevel = carParts?.engine?.level || 0;
+  const tiresLevel = carParts?.tires?.level || 0;
+  const styleLevel = carParts?.style_body?.level || 0;
+  const reliabilityLevel = carParts?.reliability_base?.level || 0;
+  
+  // Итоговые параметры = база + тюнинг
+  const totalPower = baseCar.power + (engineLevel * 5);
+  const totalSpeed = baseCar.speed + (tiresLevel * 3);
+  const totalStyle = baseCar.style + (styleLevel * 4);
+  const totalReliability = baseCar.reliability + (reliabilityLevel * 5);
+  
+  return {
+    // Power события (0-30% шанс)
+    powerBoost: Math.min(0.3, totalPower / 350),
+    powerLack: Math.max(0, (80 - totalPower) / 400),
+    
+    // Speed события (0-35% шанс)
+    perfectStart: Math.min(0.35, totalSpeed / 400),
+    slowReaction: Math.max(0, (100 - totalSpeed) / 500),
+    
+    // Style события (0-40% шанс)
+    perfectTurn: Math.min(0.4, totalStyle / 100),
+    crash: Math.max(0.05, (60 - totalStyle) / 200),
+    
+    // Reliability события (0-35% шанс)
+    systemsOk: Math.min(0.35, totalReliability / 150),
+    breakdown: Math.max(0.02, (80 - totalReliability) / 300)
+  };
+}
+
+// === 🆕 ГЕНЕРАЦИЯ СОБЫТИЙ ДЛЯ УЧАСТНИКА ===
+function generateParticipantEvents(chances) {
+  const events = {};
+  
+  // Power события
+  if (Math.random() < chances.powerBoost) {
+    events.powerEvent = Math.random() < 0.5 ? 'powerRush' : 'motorRoar';
+  } else if (Math.random() < chances.powerLack) {
+    events.powerEvent = 'weakEngine';
+  }
+  
+  // Speed события
+  if (Math.random() < chances.perfectStart) {
+    events.speedEvent = Math.random() < 0.6 ? 'perfectStart' : 'quickReaction';
+  } else if (Math.random() < chances.slowReaction) {
+    events.speedEvent = 'slowStart';
+  }
+  
+  // Style события
+  if (Math.random() < chances.perfectTurn) {
+    events.styleEvent = Math.random() < 0.7 ? 'perfectTurn' : 'masterControl';
+  } else if (Math.random() < chances.crash) {
+    events.styleEvent = Math.random() < 0.6 ? 'crash' : 'loseControl';
+  }
+  
+  // Reliability события
+  if (Math.random() < chances.systemsOk) {
+    events.reliabilityEvent = Math.random() < 0.5 ? 'perfectEngine' : 'systemsOk';
+  } else if (Math.random() < chances.breakdown) {
+    events.reliabilityEvent = Math.random() < 0.4 ? 'techProblem' : 'overheating';
+  }
+  
+  return events;
+}
+
+// === 🆕 ПРИМЕНЕНИЕ ЭФФЕКТОВ СОБЫТИЙ ===
+function applyEventEffects(baseScore, events) {
+  let finalScore = baseScore;
+  let appliedEvents = [];
+  
+  // Power события
+  if (events.powerEvent === 'powerRush') {
+    finalScore *= 1.25;
+    appliedEvents.push({ type: 'power_boost', multiplier: 1.25 });
+  } else if (events.powerEvent === 'motorRoar') {
+    finalScore *= 1.20;
+    appliedEvents.push({ type: 'power_boost', multiplier: 1.20 });
+  } else if (events.powerEvent === 'weakEngine') {
+    finalScore *= 0.85;
+    appliedEvents.push({ type: 'power_lack', multiplier: 0.85 });
+  }
+  
+  // Speed события
+  if (events.speedEvent === 'perfectStart') {
+    finalScore *= 1.40;
+    appliedEvents.push({ type: 'speed_boost', multiplier: 1.40 });
+  } else if (events.speedEvent === 'quickReaction') {
+    finalScore *= 1.20;
+    appliedEvents.push({ type: 'speed_boost', multiplier: 1.20 });
+  } else if (events.speedEvent === 'slowStart') {
+    finalScore *= 0.75;
+    appliedEvents.push({ type: 'speed_lack', multiplier: 0.75 });
+  }
+  
+  // Style события
+  if (events.styleEvent === 'perfectTurn') {
+    finalScore *= 1.20;
+    appliedEvents.push({ type: 'style_boost', multiplier: 1.20 });
+  } else if (events.styleEvent === 'masterControl') {
+    finalScore *= 1.25;
+    appliedEvents.push({ type: 'style_boost', multiplier: 1.25 });
+  } else if (events.styleEvent === 'crash') {
+    finalScore *= 0.60;
+    appliedEvents.push({ type: 'style_fail', multiplier: 0.60 });
+  } else if (events.styleEvent === 'loseControl') {
+    finalScore *= 0.70;
+    appliedEvents.push({ type: 'style_fail', multiplier: 0.70 });
+  }
+  
+  // Reliability события
+  if (events.reliabilityEvent === 'perfectEngine') {
+    finalScore *= 1.20;
+    appliedEvents.push({ type: 'reliability_boost', multiplier: 1.20 });
+  } else if (events.reliabilityEvent === 'systemsOk') {
+    finalScore *= 1.15;
+    appliedEvents.push({ type: 'reliability_boost', multiplier: 1.15 });
+  } else if (events.reliabilityEvent === 'techProblem') {
+    finalScore *= 0.75;
+    appliedEvents.push({ type: 'reliability_fail', multiplier: 0.75 });
+  } else if (events.reliabilityEvent === 'overheating') {
+    finalScore *= 0.70;
+    appliedEvents.push({ type: 'reliability_fail', multiplier: 0.70 });
+  }
+  
+  return {
+    finalScore: Math.round(finalScore),
+    appliedEvents
+  };
+}
+
+// === 🆕 СОЗДАНИЕ СОБЫТИЙ ДЛЯ UI ===
+function createRaceEventsFromResults(racer1Events, racer2Events) {
   const events = [];
   
-  // События игрока (racer1)
-  if (racer1Events.perfectStart) {
-    events.push({ 
-      type: 'player_perfect', 
-      text: '🚀 Идеальный старт!', 
-      time: 1000,
-      participant: 'player'
-    });
-  }
+  // Функция для добавления событий участника
+  const addParticipantEvents = (participantEvents, participant) => {
+    // Power события
+    if (participantEvents.powerEvent === 'powerRush') {
+      events.push({
+        type: `${participant}_power_boost`,
+        text: participant === 'player' ? '🚀 Мощный рывок!' : '🚀 Соперник: мощный рывок!',
+        time: 1500 + Math.random() * 1000,
+        participant
+      });
+    } else if (participantEvents.powerEvent === 'motorRoar') {
+      events.push({
+        type: `${participant}_power_boost`,
+        text: participant === 'player' ? '⚡ Мотор ревет!' : '⚡ Соперник: мотор ревет!',
+        time: 2000 + Math.random() * 1000,
+        participant
+      });
+    } else if (participantEvents.powerEvent === 'weakEngine') {
+      events.push({
+        type: `${participant}_power_fail`,
+        text: participant === 'player' ? '😴 Мотор задыхается' : '😴 У соперника слабый мотор',
+        time: 2500 + Math.random() * 1000,
+        participant
+      });
+    }
+    
+    // Speed события
+    if (participantEvents.speedEvent === 'perfectStart') {
+      events.push({
+        type: `${participant}_speed_boost`,
+        text: participant === 'player' ? '🚀 Молниеносный старт!' : '🚀 Соперник: молниеносный старт!',
+        time: 800 + Math.random() * 400,
+        participant
+      });
+    } else if (participantEvents.speedEvent === 'quickReaction') {
+      events.push({
+        type: `${participant}_speed_boost`,
+        text: participant === 'player' ? '⚡ Быстрая реакция!' : '⚡ Соперник: быстрая реакция!',
+        time: 1200 + Math.random() * 500,
+        participant
+      });
+    } else if (participantEvents.speedEvent === 'slowStart') {
+      events.push({
+        type: `${participant}_speed_fail`,
+        text: participant === 'player' ? '🐢 Плохой старт' : '🐢 Соперник: плохой старт',
+        time: 1000 + Math.random() * 500,
+        participant
+      });
+    }
+    
+    // Style события
+    if (participantEvents.styleEvent === 'perfectTurn') {
+      events.push({
+        type: `${participant}_style_boost`,
+        text: participant === 'player' ? '🏁 Идеальный поворот!' : '🏁 Соперник: идеальный поворот!',
+        time: 3000 + Math.random() * 1000,
+        participant
+      });
+    } else if (participantEvents.styleEvent === 'masterControl') {
+      events.push({
+        type: `${participant}_style_boost`,
+        text: participant === 'player' ? '🌟 Виртуозное управление!' : '🌟 Соперник: виртуозное управление!',
+        time: 3500 + Math.random() * 1000,
+        participant
+      });
+    } else if (participantEvents.styleEvent === 'crash') {
+      events.push({
+        type: `${participant}_style_fail`,
+        text: participant === 'player' ? '💥 Занос на повороте!' : '💥 Соперника занесло!',
+        time: 3200 + Math.random() * 800,
+        participant
+      });
+    } else if (participantEvents.styleEvent === 'loseControl') {
+      events.push({
+        type: `${participant}_style_fail`,
+        text: participant === 'player' ? '🌀 Потеря контроля!' : '🌀 Соперник потерял контроль!',
+        time: 3800 + Math.random() * 700,
+        participant
+      });
+    }
+    
+    // Reliability события
+    if (participantEvents.reliabilityEvent === 'perfectEngine') {
+      events.push({
+        type: `${participant}_reliability_boost`,
+        text: participant === 'player' ? '🍀 Мотор работает идеально!' : '🍀 У соперника идеальный мотор!',
+        time: 4000 + Math.random() * 1000,
+        participant
+      });
+    } else if (participantEvents.reliabilityEvent === 'systemsOk') {
+      events.push({
+        type: `${participant}_reliability_boost`,
+        text: participant === 'player' ? '⚙️ Все системы в норме!' : '⚙️ У соперника все в норме!',
+        time: 4200 + Math.random() * 800,
+        participant
+      });
+    } else if (participantEvents.reliabilityEvent === 'techProblem') {
+      events.push({
+        type: `${participant}_reliability_fail`,
+        text: participant === 'player' ? '⚙️ Техническая проблема!' : '⚙️ У соперника проблемы!',
+        time: 4500 + Math.random() * 1000,
+        participant
+      });
+    } else if (participantEvents.reliabilityEvent === 'overheating') {
+      events.push({
+        type: `${participant}_reliability_fail`,
+        text: participant === 'player' ? '🔥 Перегрев мотора!' : '🔥 Мотор соперника перегрелся!',
+        time: 4800 + Math.random() * 700,
+        participant
+      });
+    }
+  };
   
-  if (racer1Events.crash) {
-    events.push({ 
-      type: 'player_crash', 
-      text: '💥 Занос на повороте!', 
-      time: 4000,
-      participant: 'player'
-    });
-  }
-  
-  if (racer1Events.lucky) {
-    events.push({ 
-      type: 'player_lucky', 
-      text: '🍀 Попутный ветер!', 
-      time: 2500,
-      participant: 'player'
-    });
-  }
-  
-  // События соперника (racer2)
-  if (racer2Events.perfectStart) {
-    events.push({ 
-      type: 'opponent_perfect', 
-      text: '🚀 Соперник: идеальный старт!', 
-      time: 1200,
-      participant: 'opponent'
-    });
-  }
-  
-  if (racer2Events.crash) {
-    events.push({ 
-      type: 'opponent_crash', 
-      text: '💥 Соперника занесло!', 
-      time: 4500,
-      participant: 'opponent'
-    });
-  }
-  
-  if (racer2Events.lucky) {
-    events.push({ 
-      type: 'opponent_lucky', 
-      text: '🍀 Сопернику повезло!', 
-      time: 3000,
-      participant: 'opponent'
-    });
-  }
+  addParticipantEvents(racer1Events, 'player');
+  addParticipantEvents(racer2Events, 'opponent');
   
   // Сортируем события по времени
   return events.sort((a, b) => a.time - b.time);
 }
 
-// === РАСЧЕТ РЕЗУЛЬТАТА ГОНКИ ===
+// === 🔥 ГЛАВНАЯ ФУНКЦИЯ: НОВЫЙ РАСЧЕТ РЕЗУЛЬТАТА ГОНКИ ===
 function calculateBattleResult(attackerCar, defenderCar) {
-  console.log('🏁 Начинаем гонку:', {
+  console.log('🏁 Начинаем гонку с новой системой событий:', {
     racer1: attackerCar.name,
-    racer1Power: attackerCar.power,
-    racer2: defenderCar.name,
-    racer2Power: defenderCar.power
+    racer2: defenderCar.name
   });
 
-  // НОВЫЙ УСИЛЕННЫЙ RNG - разброс ±40% вместо ±20%
-  const racer1Multiplier = Math.random() * 0.8 + 0.6; // 0.6 - 1.4 (было 0.8-1.2)
-  const racer2Multiplier = Math.random() * 0.8 + 0.6; // 0.6 - 1.4 (было 0.8-1.2)
-
-  console.log('🎲 Условия гонки:', {
-    racer1: racer1Multiplier.toFixed(2),
-    racer2: racer2Multiplier.toFixed(2)
-  });
-
-  // ✅ ОДИНАКОВЫЕ ШАНСЫ ДЛЯ ВСЕХ (независимо от роли, бот/игрок)
-  const racer1Lucky = Math.random() < 0.2;         // 20% шанс везения
-  const racer2Lucky = Math.random() < 0.2;         // 20% шанс везения (одинаковый!)
-
-  console.log('🍀 Удачные моменты:', {
-    racer1Lucky,
-    racer2Lucky
-  });
-
-  // ✅ ОДИНАКОВЫЕ ШАНСЫ НА СОБЫТИЯ ДЛЯ ВСЕХ
-  const racer1PerfectStart = Math.random() < 0.05; // 5% шанс на идеальный старт
-  const racer1Crash = Math.random() < 0.05;        // 5% шанс на занос
-  const racer2PerfectStart = Math.random() < 0.05; // 5% шанс на идеальный старт (одинаковый!)
-  const racer2Crash = Math.random() < 0.05;        // 5% шанс на занос (одинаковый!)
-
-  console.log('🏎️ Гоночные события:', {
-    racer1PerfectStart,
-    racer1Crash,
-    racer2PerfectStart,
-    racer2Crash
-  });
-
-  // Используем функцию calculateCarScore для получения мощности
-  const attackerBasePower = calculateCarScore(attackerCar);
-  const defenderBasePower = calculateCarScore(defenderCar);
-
-  // Базовые результаты
-  let racer1Score = attackerBasePower * racer1Multiplier;
-  let racer2Score = defenderBasePower * racer2Multiplier;
-
-  // Применяем удачу (попутный ветер +30%)
-  if (racer1Lucky) {
-    racer1Score *= 1.3;
-    console.log('🍀 Первый гонщик поймал попутный ветер! +30%');
-  }
+  // Получаем базовые характеристики машин
+  const attackerBase = BASE_CAR_STATS[attackerCar.id] || BASE_CAR_STATS['car_001'];
+  const defenderBase = BASE_CAR_STATS[defenderCar.id] || BASE_CAR_STATS['car_001'];
   
-  if (racer2Lucky) {
-    racer2Score *= 1.3;
-    console.log('🍀 Второй гонщик поймал попутный ветер! +30%');
-  }
-
-  // НОВАЯ ЛОГИКА: Применяем гоночные события
-  if (racer1PerfectStart && !racer1Crash) {
-    racer1Score *= 2.0; // Идеальный старт x2
-    console.log('🚀 Идеальный старт первого гонщика! x2 скорость');
-  } else if (racer1Crash) {
-    racer1Score *= 0.5; // Занос -50%
-    console.log('💥 Первый гонщик занесло на повороте! -50% скорость');
-  }
-
-  if (racer2PerfectStart && !racer2Crash) {
-    racer2Score *= 2.0; // Идеальный старт x2
-    console.log('🚀 Идеальный старт второго гонщика! x2 скорость');
-  } else if (racer2Crash) {
-    racer2Score *= 0.5; // Занос -50%
-    console.log('💥 Второго гонщика занесло на повороте! -50% скорость');
-  }
-
-  // Округляем итоговые очки
-  racer1Score = Math.round(racer1Score);
-  racer2Score = Math.round(racer2Score);
-
-  // Определяем победителя (сохраняем совместимость с существующим кодом)
-  const attackerWins = racer1Score > racer2Score;
+  // Рассчитываем детальные характеристики
+  const attackerStats = calculateDetailedCarScore(attackerCar);
+  const defenderStats = calculateDetailedCarScore(defenderCar);
+  
+  console.log('📊 Характеристики участников:', {
+    attacker: attackerStats,
+    defender: defenderStats
+  });
+  
+  // Рассчитываем шансы на события
+  const attackerChances = calculateEventChances(attackerCar.parts || {}, attackerBase);
+  const defenderChances = calculateEventChances(defenderCar.parts || {}, defenderBase);
+  
+  console.log('🎲 Шансы на события:', {
+    attackerChances,
+    defenderChances
+  });
+  
+  // Генерируем события для каждого участника
+  const attackerEvents = generateParticipantEvents(attackerChances);
+  const defenderEvents = generateParticipantEvents(defenderChances);
+  
+  console.log('🎭 Сгенерированные события:', {
+    attackerEvents,
+    defenderEvents
+  });
+  
+  // Применяем события к базовым характеристикам
+  const attackerResult = applyEventEffects(attackerStats.total, attackerEvents);
+  const defenderResult = applyEventEffects(defenderStats.total, defenderEvents);
+  
+  console.log('⚡ Результаты после событий:', {
+    attacker: attackerResult,
+    defender: defenderResult
+  });
+  
+  // Добавляем небольшой элемент случайности (±10%)
+  const randomFactor1 = 0.9 + Math.random() * 0.2; // 0.9 - 1.1
+  const randomFactor2 = 0.9 + Math.random() * 0.2; // 0.9 - 1.1
+  
+  const finalAttackerScore = Math.round(attackerResult.finalScore * randomFactor1);
+  const finalDefenderScore = Math.round(defenderResult.finalScore * randomFactor2);
+  
+  // Определяем победителя
+  const attackerWins = finalAttackerScore > finalDefenderScore;
   const winner = attackerWins ? 'attacker' : 'defender';
   
-  console.log('🏁 Результат гонки:', {
-    racer1FinalScore: racer1Score,
-    racer2FinalScore: racer2Score,
-    winner: attackerWins ? 'racer1' : 'racer2'
+  // Создаем события для UI
+  const raceEvents = createRaceEventsFromResults(attackerEvents, defenderEvents);
+  
+  console.log('🏆 Финальный результат:', {
+    winner,
+    attackerScore: finalAttackerScore,
+    defenderScore: finalDefenderScore,
+    eventsCount: raceEvents.length
   });
-
-  // ✅ СОЗДАЕМ СОБЫТИЯ ГОНКИ НА СЕРВЕРЕ
-  const raceEvents = createRaceEvents(
-    {
-      perfectStart: racer1PerfectStart,
-      crash: racer1Crash,
-      lucky: racer1Lucky
-    },
-    {
-      perfectStart: racer2PerfectStart,
-      crash: racer2Crash,
-      lucky: racer2Lucky
-    }
-  );
-
-  console.log('📋 События гонки созданы на сервере:', raceEvents);
-
+  
   // Создаем детальный отчет о гонке
   const raceReport = {
     racer1: {
-      basePower: attackerBasePower,
-      multiplier: racer1Multiplier.toFixed(2),
-      lucky: racer1Lucky,
-      perfectStart: racer1PerfectStart,
-      crash: racer1Crash,
-      finalScore: racer1Score
+      basePower: attackerStats.total,
+      breakdown: attackerStats.breakdown,
+      events: attackerEvents,
+      appliedEffects: attackerResult.appliedEvents,
+      finalScore: finalAttackerScore
     },
     racer2: {
-      basePower: defenderBasePower,
-      multiplier: racer2Multiplier.toFixed(2),
-      lucky: racer2Lucky,
-      perfectStart: racer2PerfectStart,
-      crash: racer2Crash,
-      finalScore: racer2Score
+      basePower: defenderStats.total,
+      breakdown: defenderStats.breakdown,
+      events: defenderEvents,
+      appliedEffects: defenderResult.appliedEvents,
+      finalScore: finalDefenderScore
     },
     winner: attackerWins ? 'racer1' : 'racer2',
-    events: raceEvents // ✅ ДОБАВЛЯЕМ ГОТОВЫЕ СОБЫТИЯ
+    events: raceEvents
   };
 
-  console.log('📊 Детальный отчет о гонке с событиями:', raceReport);
-
-  // Возвращаем в том же формате, что ожидает остальной код
+  // Возвращаем в совместимом формате
   return {
     winner,
-    attackerScore: racer1Score,
-    defenderScore: racer2Score,
-    margin: Math.abs(racer1Score - racer2Score),
-    attackerHadLuck: racer1Lucky || racer1PerfectStart,
-    defenderHadLuck: racer2Lucky || racer2PerfectStart,
-    raceReport // Добавляем детальный отчет с событиями
+    attackerScore: finalAttackerScore,
+    defenderScore: finalDefenderScore,
+    margin: Math.abs(finalAttackerScore - finalDefenderScore),
+    attackerHadLuck: attackerResult.appliedEvents.some(e => e.multiplier > 1),
+    defenderHadLuck: defenderResult.appliedEvents.some(e => e.multiplier > 1),
+    raceReport
   };
 }
+
+// === УСТАРЕВШИЕ ФУНКЦИИ (УДАЛЕНЫ) ===
+// createRaceEvents - заменена на createRaceEventsFromResults
 
 // === ОБНОВЛЕНИЕ СТАТИСТИКИ PvP ===
 async function updatePvPStats(userId, isWin) {
@@ -401,8 +571,9 @@ function getRaceDescription(raceReport) {
 // Экспорт всех функций
 module.exports = {
   getLeagueByPower,
-  calculateCarScore,
-  calculateBattleResult,
+  calculateCarScore, // Старая система для совместимости
+  calculateDetailedCarScore, // Новая система
+  calculateBattleResult, // Обновленная функция
   updatePvPStats,
   formatNumber,
   isValidCar,
@@ -410,5 +581,9 @@ module.exports = {
   checkPvPBattleLimit,
   cleanupOldResetFlags,
   getRaceDescription,
-  createRaceEvents // ✅ Экспортируем новую функцию
+  // Новые функции
+  calculateEventChances,
+  generateParticipantEvents,
+  applyEventEffects,
+  createRaceEventsFromResults
 };
