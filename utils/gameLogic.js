@@ -1,9 +1,153 @@
-// utils/gameLogic.js - Игровая логика и расчеты
+// utils/gameLogic.js - Игровая логика и расчеты + 🆕 СИСТЕМА РЕПУТАЦИИ
 
 const { LEAGUES, LEAGUE_POINTS, BASE_CAR_STATS } = require('../config/constants');
 const { pool } = require('../config/database');
 
-// === ОПРЕДЕЛЕНИЕ ЛИГИ ПО МОЩНОСТИ ===
+// 🆕 === СИСТЕМА РЕПУТАЦИИ ELITE-STYLE ===
+const REPUTATION_RANKS = {
+  ROOKIE: {
+    name: 'Новичок',
+    icon: '🟢',
+    minWins: 0,
+    maxWins: 10,
+    color: '#22c55e',
+    description: 'Только начинает свой путь'
+  },
+  DRIVER: {
+    name: 'Водитель', 
+    icon: '🔵',
+    minWins: 11,
+    maxWins: 25,
+    color: '#3b82f6',
+    description: 'Освоил базовые навыки'
+  },
+  RACER: {
+    name: 'Гонщик',
+    icon: '🟡', 
+    minWins: 26,
+    maxWins: 50,
+    color: '#eab308',
+    description: 'Серьезный соперник'
+  },
+  PRO: {
+    name: 'Профи',
+    icon: '🟠',
+    minWins: 51,
+    maxWins: 100,
+    color: '#f97316',
+    description: 'Опытный пилот'
+  },
+  ACE: {
+    name: 'Ас',
+    icon: '🔴',
+    minWins: 101,
+    maxWins: 200,
+    color: '#ef4444',
+    description: 'Мастер автоспорта'
+  },
+  MASTER: {
+    name: 'Мастер',
+    icon: '🟣',
+    minWins: 201,
+    maxWins: 350,
+    color: '#8b5cf6',
+    description: 'Виртуоз за рулем'
+  },
+  LEGEND: {
+    name: 'Легенда',
+    icon: '⚫',
+    minWins: 351,
+    maxWins: 500,
+    color: '#6b7280',
+    description: 'Живая легенда трассы'
+  },
+  CHAMPION: {
+    name: 'Чемпион',
+    icon: '💎',
+    minWins: 501,
+    maxWins: 750,
+    color: '#06b6d4',
+    description: 'Непобедимый чемпион'
+  },
+  ELITE: {
+    name: 'Элита',
+    icon: '👑',
+    minWins: 751,
+    maxWins: Infinity,
+    color: '#ffd700',
+    description: 'Элита автоспорта'
+  }
+};
+
+// 🆕 === ФУНКЦИЯ ОПРЕДЕЛЕНИЯ РАНГА ПО ПОБЕДАМ ===
+function getReputationRank(totalWins) {
+  // Валидация входного параметра
+  const wins = Math.max(0, parseInt(totalWins) || 0);
+  
+  // Ищем подходящий ранг
+  for (const [rankKey, rankData] of Object.entries(REPUTATION_RANKS)) {
+    if (wins >= rankData.minWins && wins <= rankData.maxWins) {
+      return {
+        key: rankKey,
+        name: rankData.name,
+        icon: rankData.icon,
+        color: rankData.color,
+        description: rankData.description,
+        currentWins: wins,
+        nextRankWins: rankData.maxWins === Infinity ? null : rankData.maxWins + 1,
+        progressPercent: rankData.maxWins === Infinity ? 100 : 
+          Math.round(((wins - rankData.minWins) / (rankData.maxWins - rankData.minWins)) * 100)
+      };
+    }
+  }
+  
+  // Fallback на новичка
+  return {
+    key: 'ROOKIE',
+    name: 'Новичок',
+    icon: '🟢',
+    color: '#22c55e',
+    description: 'Только начинает свой путь',
+    currentWins: wins,
+    nextRankWins: 11,
+    progressPercent: Math.min(100, Math.round((wins / 10) * 100))
+  };
+}
+
+// 🆕 === ФУНКЦИЯ СРАВНЕНИЯ РАНГОВ ===
+function compareReputationRanks(rank1, rank2) {
+  const ranks = Object.keys(REPUTATION_RANKS);
+  const index1 = ranks.indexOf(rank1.key);
+  const index2 = ranks.indexOf(rank2.key);
+  
+  if (index1 > index2) return 1;   // rank1 выше
+  if (index1 < index2) return -1;  // rank2 выше
+  return 0;                        // равны
+}
+
+// 🆕 === ФУНКЦИЯ ПОЛУЧЕНИЯ ВСЕХ РАНГОВ (ДЛЯ UI) ===
+function getAllReputationRanks() {
+  return Object.entries(REPUTATION_RANKS).map(([key, data]) => ({
+    key,
+    ...data
+  }));
+}
+
+// 🆕 === ФУНКЦИЯ ФОРМАТИРОВАНИЯ РАНГА ДЛЯ ОТОБРАЖЕНИЯ ===
+function formatReputationRank(rank, showProgress = false) {
+  if (!rank) return '🟢 Новичок';
+  
+  let result = `${rank.icon} ${rank.name}`;
+  
+  if (showProgress && rank.nextRankWins) {
+    const winsNeeded = rank.nextRankWins - rank.currentWins;
+    result += ` (${winsNeeded} до следующего)`;
+  }
+  
+  return result;
+}
+
+// === ОПРЕДЕЛЕНИЕ ЛИГИ ПО МОЩНОСТИ (СТАРАЯ СИСТЕМА) ===
 function getLeagueByPower(carPower) {
   for (const [key, league] of Object.entries(LEAGUES)) {
     if (carPower >= league.minPower && carPower <= league.maxPower) {
@@ -405,9 +549,6 @@ function calculateBattleResult(attackerCar, defenderCar) {
   };
 }
 
-// === УСТАРЕВШИЕ ФУНКЦИИ (УДАЛЕНЫ) ===
-// createRaceEvents - заменена на createRaceEventsFromResults
-
 // === ОБНОВЛЕНИЕ СТАТИСТИКИ PvP ===
 async function updatePvPStats(userId, isWin) {
   try {
@@ -570,10 +711,11 @@ function getRaceDescription(raceReport) {
 
 // Экспорт всех функций
 module.exports = {
+  // Старые функции (для совместимости)
   getLeagueByPower,
-  calculateCarScore, // Старая система для совместимости
-  calculateDetailedCarScore, // Новая система
-  calculateBattleResult, // Обновленная функция
+  calculateCarScore,
+  calculateDetailedCarScore,
+  calculateBattleResult,
   updatePvPStats,
   formatNumber,
   isValidCar,
@@ -581,9 +723,17 @@ module.exports = {
   checkPvPBattleLimit,
   cleanupOldResetFlags,
   getRaceDescription,
-  // Новые функции
+  
+  // Новые функции событий
   calculateEventChances,
   generateParticipantEvents,
   applyEventEffects,
-  createRaceEventsFromResults
+  createRaceEventsFromResults,
+  
+  // 🆕 НОВЫЕ ФУНКЦИИ РЕПУТАЦИИ
+  getReputationRank,
+  compareReputationRanks,
+  getAllReputationRanks,
+  formatReputationRank,
+  REPUTATION_RANKS // Экспортируем константы для использования в других модулях
 };

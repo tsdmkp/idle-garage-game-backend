@@ -1,4 +1,4 @@
-// routes/pvpRoutes.js - PvP API эндпоинты с ИСПРАВЛЕННЫМИ аватарками и статистикой
+// routes/pvpRoutes.js - PvP API эндпоинты с РЕПУТАЦИОННОЙ СИСТЕМОЙ
 
 const express = require('express');
 const router = express.Router();
@@ -12,7 +12,11 @@ const {
   calculateBattleResult,
   updatePvPStats,
   checkPvPBattleLimit,
-  cleanupOldResetFlags
+  cleanupOldResetFlags,
+  // 🆕 НОВЫЕ ИМПОРТЫ ДЛЯ РЕПУТАЦИИ
+  getReputationRank,
+  formatReputationRank,
+  compareReputationRanks
 } = require('../utils/gameLogic');
 
 // Запускаем очистку старых флагов каждый час
@@ -20,7 +24,7 @@ setInterval(cleanupOldResetFlags, 60 * 60 * 1000);
 
 // === PvP API ЭНДПОИНТЫ ===
 
-// GET /api/pvp/league-info - Информация о лиге игрока
+// GET /api/pvp/league-info - Информация о лиге игрока (БЕЗ ИЗМЕНЕНИЙ)
 router.get('/league-info', async (req, res) => {
   try {
     const userId = req.query.userId || req.userId || 'default';
@@ -104,7 +108,7 @@ router.get('/league-info', async (req, res) => {
   }
 });
 
-// GET /api/pvp/opponents - Поиск соперников (✅ ИСПРАВЛЕНО)
+// GET /api/pvp/opponents - Поиск соперников (🆕 С РЕПУТАЦИОННОЙ СИСТЕМОЙ)
 router.get('/opponents', async (req, res) => {
   try {
     const userId = req.query.userId || req.userId || 'default';
@@ -135,7 +139,7 @@ router.get('/opponents', async (req, res) => {
     
     console.log(`👤 Игрок ${userId}: мощность ${playerPower}, лига ${playerLeague}`);
     
-    // ✅ ИСПРАВЛЕНО: Поиск реальных игроков С АВАТАРКАМИ И СТАТИСТИКОЙ
+    // 🆕 ИСПРАВЛЕНО: Поиск реальных игроков С РЕПУТАЦИЕЙ
     const realPlayersResult = await pool.query(`
       SELECT 
         u.user_id,
@@ -163,30 +167,34 @@ router.get('/opponents', async (req, res) => {
       const selectedCar = playerCars.find(car => car.id === player.selected_car_id) || playerCars[0];
       const carPower = selectedCar ? calculateCarScore(selectedCar) : 100;
       
-      // ✅ ИСПРАВЛЕНО: Рассчитываем РЕАЛЬНЫЙ винрейт
+      // 🆕 ГЛАВНОЕ ИЗМЕНЕНИЕ: Рассчитываем репутацию вместо отображения мощности
+      const playerReputation = getReputationRank(player.total_wins);
       const totalGames = player.total_wins + player.total_losses;
       const winRate = totalGames > 0 ? Math.round((player.total_wins / totalGames) * 100) : 50;
       
       return {
         user_id: player.user_id,
         username: player.username || 'Игрок',
-        player_photo: player.player_photo, // ✅ ДОБАВЛЕНО!
+        player_photo: player.player_photo,
         car_name: selectedCar?.name || 'Неизвестная машина',
-        car_power: carPower,
-        total_wins: player.total_wins, // ✅ РЕАЛЬНАЯ статистика
-        total_losses: player.total_losses, // ✅ РЕАЛЬНАЯ статистика
+        car_power: carPower, // ✅ СОХРАНЯЕМ для боевых расчетов (скрыто от UI)
+        total_wins: player.total_wins,
+        total_losses: player.total_losses,
         current_league: player.current_league,
+        // 🆕 НОВЫЕ ПОЛЯ РЕПУТАЦИИ
+        reputation: playerReputation,
+        reputation_display: formatReputationRank(playerReputation),
         type: 'player',
         last_active: player.last_exit_time,
-        powerDifference: carPower - playerPower,
-        winRate: winRate, // ✅ РЕАЛЬНЫЙ винрейт
+        powerDifference: carPower - playerPower, // ✅ СОХРАНЯЕМ для подбора (скрыто от UI)
+        winRate: winRate,
         isOnline: (Date.now() - new Date(player.last_exit_time).getTime()) < 30 * 60 * 1000
       };
     }).filter(player => Math.abs(player.powerDifference) <= 100);
     
     console.log(`👥 Найдено реальных игроков: ${realPlayers.length}`);
     
-    // 🤖 ПОИСК БОТОВ (без изменений)
+    // 🤖 ПОИСК БОТОВ С РЕПУТАЦИЕЙ
     const bots = await pool.query(`
       SELECT 
         'bot_' || bot_id as user_id,
@@ -209,7 +217,7 @@ router.get('/opponents', async (req, res) => {
     
     console.log(`🤖 Найдено ботов: ${bots.rows.length}`);
     
-    // Объединяем и сортируем
+    // 🆕 ОБНОВЛЕННАЯ ОБРАБОТКА БОТОВ И ИГРОКОВ
     const allOpponents = [...realPlayers, ...bots.rows].map(opponent => {
       let realCarPower = opponent.car_power;
       
@@ -223,13 +231,20 @@ router.get('/opponents', async (req, res) => {
         console.log(`🔍 Бот ${opponent.username}: базовая мощность ${opponent.car_power} → реальная ${realCarPower}`);
       }
       
+      // 🆕 РЕПУТАЦИЯ ДЛЯ БОТОВ (если еще не рассчитана)
+      if (opponent.type === 'bot' && !opponent.reputation) {
+        const botReputation = getReputationRank(opponent.total_wins);
+        opponent.reputation = botReputation;
+        opponent.reputation_display = formatReputationRank(botReputation);
+      }
+      
       return {
         ...opponent,
-        car_power: realCarPower,
+        car_power: realCarPower, // ✅ РЕАЛЬНАЯ мощность для боевых расчетов
         winRate: opponent.total_wins + opponent.total_losses > 0 
           ? Math.round((opponent.total_wins / (opponent.total_wins + opponent.total_losses)) * 100)
           : 50,
-        powerDifference: realCarPower - playerPower,
+        powerDifference: realCarPower - playerPower, // ✅ Скрыто от UI, для подбора
         isOnline: opponent.type === 'bot' || 
           (new Date() - new Date(opponent.last_active)) < 30 * 60 * 1000,
         priority: opponent.type === 'player' ? 1 : 2
@@ -238,12 +253,15 @@ router.get('/opponents', async (req, res) => {
     
     console.log(`⚔️ Итого соперников: ${allOpponents.length}`);
     
+    // 🆕 ДОПОЛНИТЕЛЬНАЯ СОРТИРОВКА ПО РЕПУТАЦИИ (опционально)
+    // Можно добавить сортировку по близости рангов для более честной игры
+    
     res.json({
       success: true,
       data: {
         opponents: allOpponents,
         playerLeague,
-        playerPower,
+        playerPower, // ✅ СОХРАНЯЕМ для клиента (но не показываем в UI)
         entryFee: LEAGUES[playerLeague].entryFee
       }
     });
@@ -254,7 +272,7 @@ router.get('/opponents', async (req, res) => {
   }
 });
 
-// POST /api/pvp/challenge - Вызвать на дуэль (✅ ИСПРАВЛЕНО)
+// POST /api/pvp/challenge - Вызвать на дуэль (БЕЗ ИЗМЕНЕНИЙ - тюнинг сохранен!)
 router.post('/challenge', async (req, res) => {
   try {
     const { userId, opponentId, message } = req.body;
@@ -315,7 +333,7 @@ router.post('/challenge', async (req, res) => {
     // Списываем монеты
     await pool.query('UPDATE users SET game_coins = game_coins - $1 WHERE user_id = $2', [entryFee, finalUserId]);
     
-    // 🤖 БОЙ С БОТОМ (без изменений)
+    // 🤖 БОЙ С БОТОМ (БЕЗ ИЗМЕНЕНИЙ - тюнинг работает!)
     if (opponentId.startsWith('bot_')) {
       const botId = opponentId.replace('bot_', '');
       const bot = await pool.query('SELECT * FROM pvp_bots WHERE bot_id = $1', [botId]);
@@ -364,7 +382,7 @@ router.post('/challenge', async (req, res) => {
         RETURNING *
       `, [finalUserId, opponentId, playerLeague, entryFee, playerPower, calculateCarScore(botCar)]);
       
-      // Расчет боя
+      // ✅ РАСЧЕТ БОЯ С ПОЛНЫМ ТЮНИНГОМ
       const battleResult = calculateBattleResult(currentCar, botCar);
       const league = LEAGUES[playerLeague];
       
@@ -432,7 +450,7 @@ router.post('/challenge', async (req, res) => {
       });
       
     } else {
-      // ✅ ИСПРАВЛЕНО: БОЙ С РЕАЛЬНЫМ ИГРОКОМ
+      // 👥 БОЙ С РЕАЛЬНЫМ ИГРОКОМ (БЕЗ ИЗМЕНЕНИЙ - тюнинг работает!)
       console.log(`👥 Бой с реальным игроком: ${opponentId}`);
       
       const opponentResult = await pool.query(`
@@ -463,7 +481,7 @@ router.post('/challenge', async (req, res) => {
         RETURNING *
       `, [finalUserId, opponentId, playerLeague, entryFee, playerPower, calculateCarScore(opponentCar)]);
       
-      // Автоматический бой
+      // ✅ АВТОМАТИЧЕСКИЙ БОЙ С ПОЛНЫМ ТЮНИНГОМ
       const battleResult = calculateBattleResult(currentCar, opponentCar);
       const league = LEAGUES[playerLeague];
       
@@ -496,7 +514,7 @@ router.post('/challenge', async (req, res) => {
       // Тратим топливо
       await pool.query('UPDATE users SET fuel_count = fuel_count - 1 WHERE user_id = $1', [finalUserId]);
       
-      // ✅ ИСПРАВЛЕНО: Обновляем статистику ПРАВИЛЬНО
+      // Обновляем статистику
       await updatePvPStats(finalUserId, isPlayerWinner);
       await updatePvPStats(opponentId, !isPlayerWinner);
       
@@ -551,7 +569,7 @@ router.post('/challenge', async (req, res) => {
   }
 });
 
-// POST /api/pvp/reset-limit - Сброс лимита PvP боев
+// POST /api/pvp/reset-limit - Сброс лимита PvP боев (БЕЗ ИЗМЕНЕНИЙ)
 router.post('/reset-limit', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -668,7 +686,7 @@ router.post('/reset-limit', async (req, res) => {
   }
 });
 
-// GET /api/pvp/debug-limit - Отладочный эндпоинт для проверки лимитов
+// GET /api/pvp/debug-limit - Отладочный эндпоинт для проверки лимитов (БЕЗ ИЗМЕНЕНИЙ)
 router.get('/debug-limit', async (req, res) => {
   try {
     const userId = req.query.userId || req.userId || 'default';
@@ -726,7 +744,7 @@ router.get('/debug-limit', async (req, res) => {
   }
 });
 
-// GET /api/pvp/match-history - История боев (✅ ИСПРАВЛЕНО)
+// GET /api/pvp/match-history - История боев с репутацией (🆕 УЛУЧШЕНО)
 router.get('/match-history', async (req, res) => {
   try {
     const userId = req.query.userId || req.userId || 'default';
@@ -734,7 +752,7 @@ router.get('/match-history', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
     
-    // ✅ ИСПРАВЛЕНО: Получаем РЕАЛЬНЫЕ имена игроков
+    // 🆕 УЛУЧШЕНО: История с репутацией соперников
     const matches = await pool.query(`
       SELECT 
         m.*,
@@ -762,16 +780,42 @@ router.get('/match-history', async (req, res) => {
           WHEN (m.attacker_id = $1 AND m.winner = 'attacker') OR 
                (m.defender_id = $1 AND m.winner = 'defender')
           THEN 'win' ELSE 'lose'
-        END as result
+        END as result,
+        -- 🆕 РЕПУТАЦИЯ СОПЕРНИКА
+        CASE 
+          WHEN m.attacker_id = $1 THEN 
+            CASE 
+              WHEN m.defender_id LIKE 'bot_%' THEN COALESCE(b_def.wins, 0)
+              ELSE COALESCE(p_def.total_wins, 0)
+            END
+          ELSE 
+            CASE 
+              WHEN m.attacker_id LIKE 'bot_%' THEN COALESCE(b_att.wins, 0)
+              ELSE COALESCE(p_att.total_wins, 0)
+            END
+        END as opponent_wins
       FROM pvp_matches m
       LEFT JOIN pvp_bots b_att ON m.attacker_id = 'bot_' || b_att.bot_id
       LEFT JOIN pvp_bots b_def ON m.defender_id = 'bot_' || b_def.bot_id
       LEFT JOIN users u_att ON m.attacker_id = u_att.user_id AND m.attacker_id NOT LIKE 'bot_%'
       LEFT JOIN users u_def ON m.defender_id = u_def.user_id AND m.defender_id NOT LIKE 'bot_%'
+      LEFT JOIN pvp_leagues p_att ON m.attacker_id = p_att.user_id AND m.attacker_id NOT LIKE 'bot_%'
+      LEFT JOIN pvp_leagues p_def ON m.defender_id = p_def.user_id AND m.defender_id NOT LIKE 'bot_%'
       WHERE m.attacker_id = $1 OR m.defender_id = $1
       ORDER BY m.match_date DESC
       LIMIT $2 OFFSET $3
     `, [userId, limit, offset]);
+    
+    // 🆕 ДОБАВЛЯЕМ РЕПУТАЦИЮ К РЕЗУЛЬТАТАМ
+    const enrichedMatches = matches.rows.map(match => {
+      const opponentReputation = getReputationRank(match.opponent_wins || 0);
+      
+      return {
+        ...match,
+        opponent_reputation: opponentReputation,
+        opponent_reputation_display: formatReputationRank(opponentReputation)
+      };
+    });
     
     const totalCount = await pool.query(`
       SELECT COUNT(*) as count FROM pvp_matches 
@@ -781,7 +825,7 @@ router.get('/match-history', async (req, res) => {
     res.json({
       success: true,
       data: {
-        matches: matches.rows,
+        matches: enrichedMatches,
         pagination: {
           page,
           limit,
@@ -797,7 +841,7 @@ router.get('/match-history', async (req, res) => {
   }
 });
 
-// 🆕 GET /api/pvp/bots-stats - Статистика ботов (для отладки)
+// 🆕 GET /api/pvp/bots-stats - Статистика ботов с репутацией
 router.get('/bots-stats', async (req, res) => {
   try {
     const botsStats = await pool.query(`
@@ -819,9 +863,20 @@ router.get('/bots-stats', async (req, res) => {
       ORDER BY car_power ASC
     `);
     
+    // 🆕 ДОБАВЛЯЕМ РЕПУТАЦИЮ К БОТАМ
+    const enrichedBots = botsStats.rows.map(bot => {
+      const reputation = getReputationRank(bot.wins);
+      
+      return {
+        ...bot,
+        reputation: reputation,
+        reputation_display: formatReputationRank(reputation)
+      };
+    });
+    
     // Группируем по лигам
     const byLeague = {};
-    botsStats.rows.forEach(bot => {
+    enrichedBots.forEach(bot => {
       if (!byLeague[bot.league]) {
         byLeague[bot.league] = [];
       }
@@ -831,10 +886,10 @@ router.get('/bots-stats', async (req, res) => {
     res.json({
       success: true,
       data: {
-        totalBots: botsStats.rows.length,
-        activeBots: botsStats.rows.filter(bot => bot.is_active).length,
+        totalBots: enrichedBots.length,
+        activeBots: enrichedBots.filter(bot => bot.is_active).length,
         byLeague,
-        allBots: botsStats.rows
+        allBots: enrichedBots
       }
     });
     
