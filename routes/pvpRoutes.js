@@ -1,4 +1,4 @@
-// routes/pvpRoutes.js - PvP API эндпоинты
+// routes/pvpRoutes.js - PvP API эндпоинты с улучшенной системой ботов
 
 const express = require('express');
 const router = express.Router();
@@ -99,7 +99,7 @@ router.get('/league-info', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Ошибка получения информации о лиге:', error);
+    console.error('❌ Ошибка получения информации о лиге:', error);
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
@@ -132,6 +132,8 @@ router.get('/opponents', async (req, res) => {
     
     const playerPower = calculateCarScore(currentCar);
     const playerLeague = getLeagueByPower(playerPower);
+    
+    console.log(`👤 Игрок ${userId}: мощность ${playerPower}, лига ${playerLeague}`);
     
     // Поиск реальных игроков
     const realPlayersResult = await pool.query(`
@@ -172,13 +174,16 @@ router.get('/opponents', async (req, res) => {
       };
     }).filter(player => Math.abs(player.powerDifference) <= 100); // Только подходящие по силе
     
-    // Поиск ботов
+    console.log(`👥 Найдено реальных игроков: ${realPlayers.length}`);
+    
+    // 🤖 УЛУЧШЕННЫЙ ПОИСК БОТОВ
     const bots = await pool.query(`
       SELECT 
         'bot_' || bot_id as user_id,
         bot_name as username,
         car_name,
         car_power,
+        car_parts,
         wins as total_wins,
         losses as total_losses,
         league as current_league,
@@ -192,17 +197,36 @@ router.get('/opponents', async (req, res) => {
       LIMIT 8
     `, [playerPower - 50, playerPower + 50, playerLeague]);
     
-    // Объединяем и сортируем
-    const allOpponents = [...realPlayers, ...bots.rows].map(opponent => ({
-      ...opponent,
-      winRate: opponent.total_wins + opponent.total_losses > 0 
-        ? Math.round((opponent.total_wins / (opponent.total_wins + opponent.total_losses)) * 100)
-        : 0,
-      powerDifference: opponent.car_power - playerPower,
-      isOnline: opponent.type === 'bot' || 
-        (new Date() - new Date(opponent.last_active)) < 30 * 60 * 1000,
-      priority: opponent.type === 'player' ? 1 : 2
-    })).sort((a, b) => a.priority - b.priority);
+    console.log(`🤖 Найдено ботов: ${bots.rows.length}`);
+    
+    // Объединяем и сортируем с улучшенной обработкой ботов
+    const allOpponents = [...realPlayers, ...bots.rows].map(opponent => {
+      let realCarPower = opponent.car_power;
+      
+      // 🆕 Для ботов рассчитываем реальную мощность на основе тюнинга
+      if (opponent.type === 'bot' && opponent.car_parts) {
+        const tempCar = {
+          id: `bot_car_${opponent.user_id}`,
+          parts: opponent.car_parts
+        };
+        realCarPower = calculateCarScore(tempCar);
+        console.log(`🔍 Бот ${opponent.username}: базовая мощность ${opponent.car_power} → реальная ${realCarPower}`);
+      }
+      
+      return {
+        ...opponent,
+        car_power: realCarPower,
+        winRate: opponent.total_wins + opponent.total_losses > 0 
+          ? Math.round((opponent.total_wins / (opponent.total_wins + opponent.total_losses)) * 100)
+          : 50,
+        powerDifference: realCarPower - playerPower,
+        isOnline: opponent.type === 'bot' || 
+          (new Date() - new Date(opponent.last_active)) < 30 * 60 * 1000,
+        priority: opponent.type === 'player' ? 1 : 2
+      };
+    }).sort((a, b) => a.priority - b.priority);
+    
+    console.log(`⚔️ Итого соперников: ${allOpponents.length}`);
     
     res.json({
       success: true,
@@ -215,7 +239,7 @@ router.get('/opponents', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Ошибка поиска соперников:', error);
+    console.error('❌ Ошибка поиска соперников:', error);
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
@@ -226,12 +250,10 @@ router.post('/challenge', async (req, res) => {
     const { userId, opponentId, message } = req.body;
     const finalUserId = userId || req.userId || 'default';
     
-    // ✅ ДОБАВЛЯЕМ ДИАГНОСТИКУ
     console.log('🔍 PvP Challenge Debug:', {
       userId: finalUserId,
       opponentId,
-      timestamp: new Date().toISOString(),
-      userAgent: req.get('User-Agent')
+      timestamp: new Date().toISOString()
     });
     
     if (!opponentId) {
@@ -283,16 +305,46 @@ router.post('/challenge', async (req, res) => {
     // Списываем монеты
     await pool.query('UPDATE users SET game_coins = game_coins - $1 WHERE user_id = $2', [entryFee, finalUserId]);
     
-    // Если это бот - автоматически проводим бой
+    // 🤖 УЛУЧШЕННАЯ ЛОГИКА ДЛЯ БОТОВ
     if (opponentId.startsWith('bot_')) {
       const botId = opponentId.replace('bot_', '');
       const bot = await pool.query('SELECT * FROM pvp_bots WHERE bot_id = $1', [botId]);
       
       if (bot.rows.length === 0) {
-        // Возвращаем монеты
         await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [entryFee, finalUserId]);
         return res.status(400).json({ error: 'Бот не найден' });
       }
+      
+      const botData = bot.rows[0];
+      
+      // 🆕 СОЗДАЕМ МАШИНУ БОТА С РЕАЛЬНЫМ ТЮНИНГОМ
+      let botCarParts = {};
+      
+      if (botData.car_parts && typeof botData.car_parts === 'object') {
+        botCarParts = botData.car_parts;
+        console.log(`🤖 Бот ${botData.bot_name} использует детальный тюнинг:`, botCarParts);
+      } else {
+        console.log(`⚠️ У бота ${botData.bot_name} нет детального тюнинга, создаем базовый`);
+        const totalLevels = Math.min(20, Math.floor(botData.car_power / 20));
+        botCarParts = {
+          engine: { level: Math.floor(totalLevels * 0.4) },
+          tires: { level: Math.floor(totalLevels * 0.3) },
+          style_body: { level: Math.floor(totalLevels * 0.2) },
+          reliability_base: { level: Math.floor(totalLevels * 0.1) }
+        };
+      }
+      
+      const botCar = {
+        id: `bot_${botData.bot_id}`,
+        name: botData.car_name,
+        parts: botCarParts
+      };
+      
+      console.log(`🏎️ Создана машина бота:`, {
+        name: botCar.name,
+        parts: botCar.parts,
+        calculatedPower: calculateCarScore(botCar)
+      });
       
       // Создаем вызов
       const challenge = await pool.query(`
@@ -300,20 +352,9 @@ router.post('/challenge', async (req, res) => {
           from_user_id, to_user_id, league, entry_fee, from_car_power, to_car_power
         ) VALUES ($1, $2, $3, $4, $5, $6)
         RETURNING *
-      `, [finalUserId, opponentId, playerLeague, entryFee, playerPower, bot.rows[0].car_power]);
+      `, [finalUserId, opponentId, playerLeague, entryFee, playerPower, calculateCarScore(botCar)]);
       
-      // Автоматический бой с ботом
-      const botCar = {
-        id: 'bot_car',
-        name: bot.rows[0].car_name,
-        parts: {
-          engine: { level: Math.floor(bot.rows[0].car_power / 100) },
-          tires: { level: 0 },
-          style_body: { level: 0 },
-          reliability_base: { level: 0 }
-        }
-      };
-      
+      // 🔥 НОВАЯ СИСТЕМА БОЕВ
       const battleResult = calculateBattleResult(currentCar, botCar);
       const league = LEAGUES[playerLeague];
       
@@ -334,8 +375,8 @@ router.post('/challenge', async (req, res) => {
         ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
       `, [
         challenge.rows[0].challenge_id, finalUserId, opponentId, playerLeague,
-        playerPower, bot.rows[0].car_power,
-        currentCar.name, bot.rows[0].car_name,
+        playerPower, calculateCarScore(botCar),
+        currentCar.name, botCar.name,
         battleResult.winner,
         isPlayerWinner ? winnerReward : loserReward,
         isPlayerWinner ? loserReward : winnerReward,
@@ -366,6 +407,8 @@ router.post('/challenge', async (req, res) => {
         WHERE challenge_id = $1
       `, [challenge.rows[0].challenge_id]);
       
+      console.log(`🏆 Бой с ботом завершен: ${isPlayerWinner ? 'Победа' : 'Поражение'} игрока ${finalUserId}`);
+      
       res.json({
         success: true,
         data: {
@@ -379,17 +422,15 @@ router.post('/challenge', async (req, res) => {
       });
       
     } else {
-      // 👥 АВТОБОЙ С РЕАЛЬНЫМ ИГРОКОМ
+      // 👥 БОЙ С РЕАЛЬНЫМ ИГРОКОМ
       console.log(`👥 Бой с реальным игроком: ${opponentId}`);
       
-      // Получаем данные соперника
       const opponentResult = await pool.query(
         'SELECT user_id, first_name, player_cars, selected_car_id FROM users WHERE user_id = $1',
         [opponentId]
       );
       
       if (opponentResult.rows.length === 0) {
-        // Возвращаем монеты
         await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [entryFee, finalUserId]);
         return res.status(400).json({ error: 'Игрок не найден' });
       }
@@ -487,19 +528,19 @@ router.post('/challenge', async (req, res) => {
             yourReward: playerReward,
             opponentName: opponent.first_name || 'Игрок',
             battleDetails: battleResult,
-            isRealPlayer: true // 🎮 ЭТО БЫЛ РЕАЛЬНЫЙ ИГРОК!
+            isRealPlayer: true
           }
         }
       });
     }
     
   } catch (error) {
-    console.error('Ошибка создания вызова:', error);
+    console.error('❌ Ошибка создания вызова:', error);
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
 
-/// 🔧 ПОЛНОСТЬЮ ИСПРАВЛЕННЫЙ ЭНДПОИНТ: POST /api/pvp/reset-limit
+// POST /api/pvp/reset-limit - Сброс лимита PvP боев
 router.post('/reset-limit', async (req, res) => {
   try {
     const { userId } = req.body;
@@ -530,8 +571,6 @@ router.post('/reset-limit', async (req, res) => {
     // Проверяем текущий лимит боев
     const currentLimit = await checkPvPBattleLimit(finalUserId, GAME_LIMITS.MAX_PVP_BATTLES_PER_HOUR);
     
-    console.log('📊 Текущий статус лимита:', currentLimit);
-    
     if (currentLimit.canBattle) {
       return res.json({ 
         success: true, 
@@ -548,7 +587,6 @@ router.post('/reset-limit', async (req, res) => {
     const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
     const resetTime = new Date().toISOString();
     
-    // 🔧 ИСПРАВЛЕННЫЙ SQL-ЗАПРОС: создаем JSON объект правильно
     const resetData = JSON.stringify({
       limit_reset: true,
       reset_time: resetTime
@@ -572,9 +610,7 @@ router.post('/reset-limit', async (req, res) => {
     // Проверяем результат
     const newLimit = await checkPvPBattleLimit(finalUserId, GAME_LIMITS.MAX_PVP_BATTLES_PER_HOUR);
     
-    console.log('📊 Новый статус лимита после сброса:', newLimit);
-    
-    // 🔧 ЗАЩИЩЕННАЯ ЗАПИСЬ В ADSGRAM
+    // Записываем в adsgram_rewards для аналитики
     try {
       const tableCheck = await pool.query(`
         SELECT EXISTS (
@@ -588,9 +624,6 @@ router.post('/reset-limit', async (req, res) => {
           INSERT INTO adsgram_rewards (user_id, reward_type, reward_coins, block_id)
           VALUES ($1, 'pvp_limit_reset', 0, 'limit_reset_' || $2)
         `, [finalUserId, Date.now()]);
-        console.log('📝 Сброс лимита записан в adsgram_rewards');
-      } else {
-        console.log('⚠️ Таблица adsgram_rewards не существует, пропускаем запись');
       }
     } catch (adsgramError) {
       console.log('⚠️ Ошибка записи в adsgram_rewards:', adsgramError.message);
@@ -624,7 +657,7 @@ router.post('/reset-limit', async (req, res) => {
   }
 });
 
-// 🆕 GET /api/pvp/debug-limit - Отладочный эндпоинт для проверки лимитов
+// GET /api/pvp/debug-limit - Отладочный эндпоинт для проверки лимитов
 router.get('/debug-limit', async (req, res) => {
   try {
     const userId = req.query.userId || req.userId || 'default';
@@ -739,7 +772,54 @@ router.get('/match-history', async (req, res) => {
     });
     
   } catch (error) {
-    console.error('Ошибка получения истории боев:', error);
+    console.error('❌ Ошибка получения истории боев:', error);
+    res.status(500).json({ error: 'Внутренняя ошибка сервера' });
+  }
+});
+
+// 🆕 GET /api/pvp/bots-stats - Статистика ботов (для отладки)
+router.get('/bots-stats', async (req, res) => {
+  try {
+    const botsStats = await pool.query(`
+      SELECT 
+        bot_name,
+        car_name,
+        car_power,
+        car_parts,
+        league,
+        wins,
+        losses,
+        CASE 
+          WHEN wins + losses > 0 THEN ROUND((wins::float / (wins + losses)) * 100, 1)
+          ELSE 0
+        END as win_rate,
+        last_online,
+        is_active
+      FROM pvp_bots
+      ORDER BY car_power ASC
+    `);
+    
+    // Группируем по лигам
+    const byLeague = {};
+    botsStats.rows.forEach(bot => {
+      if (!byLeague[bot.league]) {
+        byLeague[bot.league] = [];
+      }
+      byLeague[bot.league].push(bot);
+    });
+    
+    res.json({
+      success: true,
+      data: {
+        totalBots: botsStats.rows.length,
+        activeBots: botsStats.rows.filter(bot => bot.is_active).length,
+        byLeague,
+        allBots: botsStats.rows
+      }
+    });
+    
+  } catch (error) {
+    console.error('❌ Ошибка получения статистики ботов:', error);
     res.status(500).json({ error: 'Внутренняя ошибка сервера' });
   }
 });
