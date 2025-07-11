@@ -191,21 +191,21 @@ function createRaceEventsFromResults(racer1Events, racer2Events) {
     if (participantEvents.powerEvent === 'powerRush') {
       events.push({
         type: `${participant}_power_boost`,
-        text: participant === 'player' ? '🚀 Мощный рывок!' : '🚀 Соперник: мощный рывок!',
+        text: participant === 'player' ? '🚀 **Турбо-ускорение!**' : '🚀 Соперник: **Турбо-ускорение!**',
         time: 1500 + Math.random() * 1000,
         participant
       });
     } else if (participantEvents.powerEvent === 'motorRoar') {
       events.push({
         type: `${participant}_power_boost`,
-        text: participant === 'player' ? '⚡ Мотор ревет!' : '⚡ Соперник: мотор ревет!',
+        text: participant === 'player' ? '⚡ **Рев двигателя на пределе!**' : '⚡ Соперник: **Рев двигателя на пределе!**',
         time: 2000 + Math.random() * 1000,
         participant
       });
     } else if (participantEvents.powerEvent === 'weakEngine') {
       events.push({
         type: `${participant}_power_fail`,
-        text: participant === 'player' ? '😴 Мотор задыхается' : '😴 У соперника слабый мотор',
+        text: participant === 'player' ? '😴 **Двигатель сбоит...**' : '😴 Соперник: **Двигатель сбоит...**',
         time: 2500 + Math.random() * 1000,
         participant
       });
@@ -215,21 +215,21 @@ function createRaceEventsFromResults(racer1Events, racer2Events) {
     if (participantEvents.speedEvent === 'perfectStart') {
       events.push({
         type: `${participant}_speed_boost`,
-        text: participant === 'player' ? '🚀 Молниеносный старт!' : '🚀 Соперник: молниеносный старт!',
+        text: participant === 'player' ? '🚀 **Идеальный старт!**' : '🚀 Соперник: **Идеальный старт!**',
         time: 800 + Math.random() * 400,
         participant
       });
     } else if (participantEvents.speedEvent === 'quickReaction') {
       events.push({
         type: `${participant}_speed_boost`,
-        text: participant === 'player' ? '⚡ Быстрая реакция!' : '⚡ Соперник: быстрая реакция!',
+        text: participant === 'player' ? '⚡ **Мгновенный рывок!**' : '⚡ Соперник: **Мгновенный рывок!**',
         time: 1200 + Math.random() * 500,
         participant
       });
     } else if (participantEvents.speedEvent === 'slowStart') {
       events.push({
         type: `${participant}_speed_fail`,
-        text: participant === 'player' ? '🐢 Плохой старт' : '🐢 Соперник: плохой старт',
+        text: participant === 'player' ? '🐢 **Заглох на старте...**' : '🐢 Соперник: **Заглох на старте...**',
         time: 1000 + Math.random() * 500,
         participant
       });
@@ -239,28 +239,28 @@ function createRaceEventsFromResults(racer1Events, racer2Events) {
     if (participantEvents.styleEvent === 'perfectTurn') {
       events.push({
         type: `${participant}_style_boost`,
-        text: participant === 'player' ? '🏁 Идеальный поворот!' : '🏁 Соперник: идеальный поворот!',
+        text: participant === 'player' ? '🏁 **Мастерский дрифт!**' : '🏁 Соперник: **Мастерский дрифт!**',
         time: 3000 + Math.random() * 1000,
         participant
       });
     } else if (participantEvents.styleEvent === 'masterControl') {
       events.push({
         type: `${participant}_style_boost`,
-        text: participant === 'player' ? '🌟 Виртуозное управление!' : '🌟 Соперник: виртуозное управление!',
+        text: participant === 'player' ? '🌟 **Безупречный контроль!**' : '🌟 Соперник: **Безупречный контроль!**',
         time: 3500 + Math.random() * 1000,
         participant
       });
     } else if (participantEvents.styleEvent === 'crash') {
       events.push({
         type: `${participant}_style_fail`,
-        text: participant === 'player' ? '💥 Занос на повороте!' : '💥 Соперника занесло!',
+        text: participant === 'player' ? '💥 **Критический занос!**' : '💥 Соперника **занесло!**',
         time: 3200 + Math.random() * 800,
         participant
       });
     } else if (participantEvents.styleEvent === 'loseControl') {
       events.push({
         type: `${participant}_style_fail`,
-        text: participant === 'player' ? '🌀 Потеря контроля!' : '🌀 Соперник потерял контроль!',
+        text: participant === 'player' ? '🌀 **Потерял управление!**' : '🌀 Соперник **потерял управление!**',
         time: 3800 + Math.random() * 700,
         participant
       });
@@ -270,28 +270,28 @@ function createRaceEventsFromResults(racer1Events, racer2Events) {
     if (participantEvents.reliabilityEvent === 'perfectEngine') {
       events.push({
         type: `${participant}_reliability_boost`,
-        text: participant === 'player' ? '🍀 Мотор работает идеально!' : '🍀 У соперника идеальный мотор!',
+        text: participant === 'player' ? '🍀 **Идеальная работа двигателя!**' : '🍀 Соперник: **Идеальная работа двигателя!**',
         time: 4000 + Math.random() * 1000,
         participant
       });
     } else if (participantEvents.reliabilityEvent === 'systemsOk') {
       events.push({
         type: `${participant}_reliability_boost`,
-        text: participant === 'player' ? '⚙️ Все системы в норме!' : '⚙️ У соперника все в норме!',
+        text: participant === 'player' ? '⚙️ **Все системы в норме!**' : '⚙️ Соперник: **Все системы в норме!**',
         time: 4200 + Math.random() * 800,
         participant
       });
     } else if (participantEvents.reliabilityEvent === 'techProblem') {
       events.push({
         type: `${participant}_reliability_fail`,
-        text: participant === 'player' ? '⚙️ Техническая проблема!' : '⚙️ У соперника проблемы!',
+        text: participant === 'player' ? '⚙️ **Техническая неисправность!**' : '⚙️ У соперника **неисправность!**',
         time: 4500 + Math.random() * 1000,
         participant
       });
     } else if (participantEvents.reliabilityEvent === 'overheating') {
       events.push({
         type: `${participant}_reliability_fail`,
-        text: participant === 'player' ? '🔥 Перегрев мотора!' : '🔥 Мотор соперника перегрелся!',
+        text: participant === 'player' ? '🔥 **Критический перегрев!**' : '🔥 Мотор соперника **перегрелся!**',
         time: 4800 + Math.random() * 700,
         participant
       });
