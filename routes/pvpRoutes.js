@@ -1,4 +1,4 @@
-// routes/pvpRoutes.js - PvP API эндпоинты с улучшенной системой ботов
+// routes/pvpRoutes.js - PvP API эндпоинты с ИСПРАВЛЕННЫМИ аватарками и статистикой
 
 const express = require('express');
 const router = express.Router();
@@ -104,7 +104,7 @@ router.get('/league-info', async (req, res) => {
   }
 });
 
-// GET /api/pvp/opponents - Поиск соперников
+// GET /api/pvp/opponents - Поиск соперников (✅ ИСПРАВЛЕНО)
 router.get('/opponents', async (req, res) => {
   try {
     const userId = req.query.userId || req.userId || 'default';
@@ -135,15 +135,20 @@ router.get('/opponents', async (req, res) => {
     
     console.log(`👤 Игрок ${userId}: мощность ${playerPower}, лига ${playerLeague}`);
     
-    // Поиск реальных игроков
+    // ✅ ИСПРАВЛЕНО: Поиск реальных игроков С АВАТАРКАМИ И СТАТИСТИКОЙ
     const realPlayersResult = await pool.query(`
       SELECT 
         u.user_id,
         u.first_name as username,
+        u.player_photo,
         u.player_cars,
         u.selected_car_id,
-        u.last_exit_time
+        u.last_exit_time,
+        COALESCE(p.total_wins, 0) as total_wins,
+        COALESCE(p.total_losses, 0) as total_losses,
+        COALESCE(p.current_league, $2) as current_league
       FROM users u
+      LEFT JOIN pvp_leagues p ON u.user_id = p.user_id
       WHERE u.user_id != $1  
         AND u.player_cars IS NOT NULL 
         AND u.player_cars != '[]'
@@ -151,32 +156,37 @@ router.get('/opponents', async (req, res) => {
         AND u.last_exit_time > NOW() - INTERVAL '7 days'
       ORDER BY u.last_exit_time DESC
       LIMIT 3
-    `, [userId]);
+    `, [userId, playerLeague]);
 
     const realPlayers = realPlayersResult.rows.map(player => {
       const playerCars = player.player_cars || [];
       const selectedCar = playerCars.find(car => car.id === player.selected_car_id) || playerCars[0];
       const carPower = selectedCar ? calculateCarScore(selectedCar) : 100;
       
+      // ✅ ИСПРАВЛЕНО: Рассчитываем РЕАЛЬНЫЙ винрейт
+      const totalGames = player.total_wins + player.total_losses;
+      const winRate = totalGames > 0 ? Math.round((player.total_wins / totalGames) * 100) : 50;
+      
       return {
         user_id: player.user_id,
         username: player.username || 'Игрок',
+        player_photo: player.player_photo, // ✅ ДОБАВЛЕНО!
         car_name: selectedCar?.name || 'Неизвестная машина',
         car_power: carPower,
-        total_wins: 5, // Временные значения
-        total_losses: 3,
-        current_league: playerLeague,
+        total_wins: player.total_wins, // ✅ РЕАЛЬНАЯ статистика
+        total_losses: player.total_losses, // ✅ РЕАЛЬНАЯ статистика
+        current_league: player.current_league,
         type: 'player',
         last_active: player.last_exit_time,
         powerDifference: carPower - playerPower,
-        winRate: 60,
+        winRate: winRate, // ✅ РЕАЛЬНЫЙ винрейт
         isOnline: (Date.now() - new Date(player.last_exit_time).getTime()) < 30 * 60 * 1000
       };
-    }).filter(player => Math.abs(player.powerDifference) <= 100); // Только подходящие по силе
+    }).filter(player => Math.abs(player.powerDifference) <= 100);
     
     console.log(`👥 Найдено реальных игроков: ${realPlayers.length}`);
     
-    // 🤖 УЛУЧШЕННЫЙ ПОИСК БОТОВ
+    // 🤖 ПОИСК БОТОВ (без изменений)
     const bots = await pool.query(`
       SELECT 
         'bot_' || bot_id as user_id,
@@ -199,11 +209,11 @@ router.get('/opponents', async (req, res) => {
     
     console.log(`🤖 Найдено ботов: ${bots.rows.length}`);
     
-    // Объединяем и сортируем с улучшенной обработкой ботов
+    // Объединяем и сортируем
     const allOpponents = [...realPlayers, ...bots.rows].map(opponent => {
       let realCarPower = opponent.car_power;
       
-      // 🆕 Для ботов рассчитываем реальную мощность на основе тюнинга
+      // Для ботов рассчитываем реальную мощность на основе тюнинга
       if (opponent.type === 'bot' && opponent.car_parts) {
         const tempCar = {
           id: `bot_car_${opponent.user_id}`,
@@ -244,7 +254,7 @@ router.get('/opponents', async (req, res) => {
   }
 });
 
-// POST /api/pvp/challenge - Вызвать на дуэль
+// POST /api/pvp/challenge - Вызвать на дуэль (✅ ИСПРАВЛЕНО)
 router.post('/challenge', async (req, res) => {
   try {
     const { userId, opponentId, message } = req.body;
@@ -305,7 +315,7 @@ router.post('/challenge', async (req, res) => {
     // Списываем монеты
     await pool.query('UPDATE users SET game_coins = game_coins - $1 WHERE user_id = $2', [entryFee, finalUserId]);
     
-    // 🤖 УЛУЧШЕННАЯ ЛОГИКА ДЛЯ БОТОВ
+    // 🤖 БОЙ С БОТОМ (без изменений)
     if (opponentId.startsWith('bot_')) {
       const botId = opponentId.replace('bot_', '');
       const bot = await pool.query('SELECT * FROM pvp_bots WHERE bot_id = $1', [botId]);
@@ -317,7 +327,7 @@ router.post('/challenge', async (req, res) => {
       
       const botData = bot.rows[0];
       
-      // 🆕 СОЗДАЕМ МАШИНУ БОТА С РЕАЛЬНЫМ ТЮНИНГОМ
+      // Создаем машину бота с реальным тюнингом
       let botCarParts = {};
       
       if (botData.car_parts && typeof botData.car_parts === 'object') {
@@ -354,7 +364,7 @@ router.post('/challenge', async (req, res) => {
         RETURNING *
       `, [finalUserId, opponentId, playerLeague, entryFee, playerPower, calculateCarScore(botCar)]);
       
-      // 🔥 НОВАЯ СИСТЕМА БОЕВ
+      // Расчет боя
       const battleResult = calculateBattleResult(currentCar, botCar);
       const league = LEAGUES[playerLeague];
       
@@ -422,13 +432,14 @@ router.post('/challenge', async (req, res) => {
       });
       
     } else {
-      // 👥 БОЙ С РЕАЛЬНЫМ ИГРОКОМ
+      // ✅ ИСПРАВЛЕНО: БОЙ С РЕАЛЬНЫМ ИГРОКОМ
       console.log(`👥 Бой с реальным игроком: ${opponentId}`);
       
-      const opponentResult = await pool.query(
-        'SELECT user_id, first_name, player_cars, selected_car_id FROM users WHERE user_id = $1',
-        [opponentId]
-      );
+      const opponentResult = await pool.query(`
+        SELECT user_id, first_name, player_cars, selected_car_id 
+        FROM users 
+        WHERE user_id = $1
+      `, [opponentId]);
       
       if (opponentResult.rows.length === 0) {
         await pool.query('UPDATE users SET game_coins = game_coins + $1 WHERE user_id = $2', [entryFee, finalUserId]);
@@ -485,7 +496,7 @@ router.post('/challenge', async (req, res) => {
       // Тратим топливо
       await pool.query('UPDATE users SET fuel_count = fuel_count - 1 WHERE user_id = $1', [finalUserId]);
       
-      // Обновляем статистику
+      // ✅ ИСПРАВЛЕНО: Обновляем статистику ПРАВИЛЬНО
       await updatePvPStats(finalUserId, isPlayerWinner);
       await updatePvPStats(opponentId, !isPlayerWinner);
       
@@ -715,7 +726,7 @@ router.get('/debug-limit', async (req, res) => {
   }
 });
 
-// GET /api/pvp/match-history - История боев
+// GET /api/pvp/match-history - История боев (✅ ИСПРАВЛЕНО)
 router.get('/match-history', async (req, res) => {
   try {
     const userId = req.query.userId || req.userId || 'default';
@@ -723,14 +734,21 @@ router.get('/match-history', async (req, res) => {
     const limit = parseInt(req.query.limit) || 20;
     const offset = (page - 1) * limit;
     
+    // ✅ ИСПРАВЛЕНО: Получаем РЕАЛЬНЫЕ имена игроков
     const matches = await pool.query(`
       SELECT 
         m.*,
         CASE 
           WHEN m.attacker_id = $1 THEN 
-            CASE WHEN m.defender_id LIKE 'bot_%' THEN b_def.bot_name ELSE 'Игрок' END
+            CASE 
+              WHEN m.defender_id LIKE 'bot_%' THEN b_def.bot_name 
+              ELSE COALESCE(u_def.first_name, 'Игрок')
+            END
           ELSE 
-            CASE WHEN m.attacker_id LIKE 'bot_%' THEN b_att.bot_name ELSE 'Игрок' END
+            CASE 
+              WHEN m.attacker_id LIKE 'bot_%' THEN b_att.bot_name 
+              ELSE COALESCE(u_att.first_name, 'Игрок')
+            END
         END as opponent_name,
         CASE 
           WHEN m.attacker_id = $1 THEN m.defender_car_name
@@ -748,6 +766,8 @@ router.get('/match-history', async (req, res) => {
       FROM pvp_matches m
       LEFT JOIN pvp_bots b_att ON m.attacker_id = 'bot_' || b_att.bot_id
       LEFT JOIN pvp_bots b_def ON m.defender_id = 'bot_' || b_def.bot_id
+      LEFT JOIN users u_att ON m.attacker_id = u_att.user_id AND m.attacker_id NOT LIKE 'bot_%'
+      LEFT JOIN users u_def ON m.defender_id = u_def.user_id AND m.defender_id NOT LIKE 'bot_%'
       WHERE m.attacker_id = $1 OR m.defender_id = $1
       ORDER BY m.match_date DESC
       LIMIT $2 OFFSET $3
