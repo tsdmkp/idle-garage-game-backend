@@ -1,44 +1,49 @@
 // config/constants.js - Игровые константы
 
 // === PvP СИСТЕМА - КОНСТАНТЫ ===
+
+
 const LEAGUES = {
   BRONZE: { 
     name: 'Бронзовая лига', 
     minPower: 0, 
-    maxPower: 199,
-    entryFee: 25,
-    rewards: { win: 40, lose: 15 },
+    maxPower: 149,
+    entryFee: 50,
+    rewards: { win: 100, lose: 20 },
     icon: '🥉',
     color: '#cd7f32'
   },
   SILVER: { 
     name: 'Серебряная лига', 
-    minPower: 200, 
+    minPower: 150, 
     maxPower: 299,
-    entryFee: 50,
-    rewards: { win: 80, lose: 25 },
+    entryFee: 100,
+    rewards: { win: 200, lose: 40 },
     icon: '🥈',
     color: '#c0c0c0'
   },
   GOLD: { 
     name: 'Золотая лига', 
     minPower: 300, 
-    maxPower: 399,
-    entryFee: 100,
-    rewards: { win: 160, lose: 50 },
+    maxPower: 499,
+    entryFee: 200,
+    rewards: { win: 400, lose: 80 },
     icon: '🥇',
     color: '#ffd700'
   },
   PLATINUM: { 
     name: 'Платиновая лига', 
-    minPower: 400, 
+    minPower: 500, 
     maxPower: 999999,
-    entryFee: 200,
-    rewards: { win: 320, lose: 100 },
+    entryFee: 500,
+    rewards: { win: 1000, lose: 200 },
     icon: '💎',
     color: '#e5e4e2'
   }
 };
+
+
+
 
 const LEAGUE_POINTS = {
   win: 10,
