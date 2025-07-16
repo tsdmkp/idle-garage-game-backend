@@ -3,76 +3,76 @@
 const { LEAGUES, LEAGUE_POINTS, BASE_CAR_STATS } = require('../config/constants');
 const { pool } = require('../config/database');
 
-// 🆕 === СИСТЕМА РЕПУТАЦИИ ELITE-STYLE ===
+// 🆕 === ОБНОВЛЕННАЯ СИСТЕМА РЕПУТАЦИИ ELITE-STYLE ===
 const REPUTATION_RANKS = {
   ROOKIE: {
     name: 'Новичок',
     icon: '🟢',
     minWins: 0,
-    maxWins: 10,
+    maxWins: 100,
     color: '#22c55e',
     description: 'Только начинает свой путь'
   },
   DRIVER: {
     name: 'Водитель', 
     icon: '🔵',
-    minWins: 11,
-    maxWins: 25,
+    minWins: 101,
+    maxWins: 250,
     color: '#3b82f6',
     description: 'Освоил базовые навыки'
   },
   RACER: {
     name: 'Гонщик',
     icon: '🟡', 
-    minWins: 26,
-    maxWins: 50,
+    minWins: 251,
+    maxWins: 500,
     color: '#eab308',
     description: 'Серьезный соперник'
   },
   PRO: {
     name: 'Профи',
     icon: '🟠',
-    minWins: 51,
-    maxWins: 100,
+    minWins: 501,
+    maxWins: 1000,
     color: '#f97316',
     description: 'Опытный пилот'
   },
   ACE: {
     name: 'Ас',
     icon: '🔴',
-    minWins: 101,
-    maxWins: 200,
+    minWins: 1001,
+    maxWins: 2000,
     color: '#ef4444',
     description: 'Мастер автоспорта'
   },
   MASTER: {
     name: 'Мастер',
     icon: '🟣',
-    minWins: 201,
-    maxWins: 350,
+    minWins: 2001,
+    maxWins: 3500,
     color: '#8b5cf6',
     description: 'Виртуоз за рулем'
   },
   LEGEND: {
     name: 'Легенда',
     icon: '⚫',
-    minWins: 351,
-    maxWins: 500,
+    minWins: 3501,
+    maxWins: 6500,
     color: '#6b7280',
     description: 'Живая легенда трассы'
   },
   CHAMPION: {
     name: 'Чемпион',
     icon: '💎',
-    minWins: 501,
-    maxWins: 750,
+    minWins: 6501,
+    maxWins: 10000,
     color: '#06b6d4',
     description: 'Непобедимый чемпион'
   },
   ELITE: {
     name: 'Элита',
     icon: '👑',
-    minWins: 751,
+    minWins: 10001,
     maxWins: Infinity,
     color: '#ffd700',
     description: 'Элита автоспорта'
@@ -109,8 +109,8 @@ function getReputationRank(totalWins) {
     color: '#22c55e',
     description: 'Только начинает свой путь',
     currentWins: wins,
-    nextRankWins: 11,
-    progressPercent: Math.min(100, Math.round((wins / 10) * 100))
+    nextRankWins: 101,
+    progressPercent: Math.min(100, Math.round((wins / 100) * 100))
   };
 }
 
