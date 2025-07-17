@@ -13,12 +13,13 @@ const {
   gracefulShutdown
 } = require('./config/database');
 
+// === ИМПОРТ КОНСТАНТ ===
+const { REFERRAL_MILESTONES } = require('./config/constants');
+
 // === ИМПОРТ МАРШРУТОВ ===
 const gameRoutes = require('./routes/gameRoutes');
 const pvpRoutes = require('./routes/pvpRoutes');
-const notificationRoutes = require('./routes/notificationRoutes'); // 🆕 ДОБАВЛЕНО
-
-
+const notificationRoutes = require('./routes/notificationRoutes');
 
 const app = express();
 const port = process.env.PORT || 3000;
@@ -114,7 +115,90 @@ app.use(cors({
 // === МАРШРУТЫ ===
 app.use('/api', gameRoutes);
 app.use('/api/pvp', pvpRoutes);
-app.use('/api/notifications', notificationRoutes); // 🆕 ДОБАВЛЕНО
+app.use('/api/notifications', notificationRoutes);
+
+// === 🆕 ФУНКЦИИ MILESTONE НАГРАД ===
+
+// Функция проверки milestone наград
+const checkAndCreateMilestoneRewards = async (userId) => {
+  try {
+    // Считаем реальных друзей (не milestone записи)
+    const friendsCount = await pool.query(`
+      SELECT COUNT(*) as count 
+      FROM user_referrals 
+      WHERE referrer_id = $1 
+      AND referred_id NOT LIKE 'milestone_%'
+    `, [userId]);
+    
+    const totalFriends = parseInt(friendsCount.rows[0]?.count || 0);
+    
+    // Проверяем какие milestone уже получены
+    const existingMilestones = await pool.query(`
+      SELECT referred_id
+      FROM user_referrals 
+      WHERE referrer_id = $1 
+      AND referred_id LIKE 'milestone_%'
+    `, [userId]);
+    
+    const claimedMilestones = existingMilestones.rows.map(row => 
+      parseInt(row.referred_id.replace('milestone_', ''))
+    );
+    
+    // Создаем недостающие milestone награды
+    const newMilestones = [];
+    
+    for (const [level, reward] of Object.entries(REFERRAL_MILESTONES)) {
+      const milestoneLevel = parseInt(level);
+      
+      if (totalFriends >= milestoneLevel && !claimedMilestones.includes(milestoneLevel)) {
+        // Создаем milestone запись
+        await pool.query(`
+          INSERT INTO user_referrals (referrer_id, referred_id, referred_name, reward_coins, claimed, created_at)
+          VALUES ($1, $2, $3, $4, false, NOW())
+          ON CONFLICT DO NOTHING
+        `, [
+          userId,
+          `milestone_${milestoneLevel}`,
+          reward.title,
+          reward.reward_coins
+        ]);
+        
+        newMilestones.push({
+          level: milestoneLevel,
+          ...reward
+        });
+        
+        console.log(`🎁 Created milestone reward for user ${userId}: ${milestoneLevel} friends`);
+      }
+    }
+    
+    return {
+      totalFriends,
+      newMilestones,
+      nextMilestone: getNextMilestone(totalFriends, [...claimedMilestones, ...newMilestones.map(m => m.level)])
+    };
+    
+  } catch (error) {
+    console.error('❌ Error checking milestone rewards:', error);
+    return { totalFriends: 0, newMilestones: [], nextMilestone: null };
+  }
+};
+
+const getNextMilestone = (currentFriends, claimedLevels) => {
+  const allLevels = [5, 10, 25, 50];
+  
+  for (const level of allLevels) {
+    if (currentFriends < level && !claimedLevels.includes(level)) {
+      return {
+        level,
+        needed: level - currentFriends,
+        reward: REFERRAL_MILESTONES[level]
+      };
+    }
+  }
+  
+  return null;
+};
 
 // === ОСТАВШИЕСЯ СПЕЦИФИЧНЫЕ ЭНДПОИНТЫ ===
 
@@ -125,13 +209,16 @@ app.get('/leaderboard', async (req, res) => {
   return app._router.handle(req, res);
 });
 
-// GET /api/friends - получение данных о друзьях
+// 🆕 ОБНОВЛЕННЫЙ GET /api/friends - получение данных о друзьях
 app.get('/api/friends', async (req, res) => {
   const userId = req.query.userId || 'default';
   console.log('👥 Friends data request for:', userId);
 
   try {
-    // Получаем список приглашенных друзей
+    // 🆕 ДОБАВЛЯЕМ ПРОВЕРКУ MILESTONE НАГРАД
+    const milestoneCheck = await checkAndCreateMilestoneRewards(userId);
+    
+    // Получаем список приглашенных друзей (только реальных)
     const friendsResult = await pool.query(`
       SELECT 
         ur.referred_id as user_id,
@@ -141,35 +228,50 @@ app.get('/api/friends', async (req, res) => {
         ur.created_at as joined_at
       FROM user_referrals ur
       WHERE ur.referrer_id = $1
+      AND ur.referred_id NOT LIKE 'milestone_%'
       ORDER BY ur.created_at DESC
     `, [userId]);
 
-    // Считаем статистику
+    // Считаем статистику (включая milestone)
     const statsResult = await pool.query(`
       SELECT 
-        COUNT(*) as total_invites,
         SUM(CASE WHEN claimed THEN reward_coins ELSE 0 END) as total_earned,
         COUNT(CASE WHEN NOT claimed THEN 1 END) as pending_count
       FROM user_referrals
       WHERE referrer_id = $1
     `, [userId]);
 
-    // Получаем неполученные награды
+    // Получаем неполученные награды (включая milestone)
     const pendingRewards = await pool.query(`
-      SELECT referred_name as friend_name, reward_coins as coins
+      SELECT 
+        referred_name as friend_name, 
+        reward_coins as coins,
+        referred_id,
+        CASE 
+          WHEN referred_id LIKE 'milestone_%' THEN 'milestone'
+          ELSE 'referral'
+        END as reward_type
       FROM user_referrals
       WHERE referrer_id = $1 AND claimed = FALSE
+      ORDER BY 
+        CASE WHEN referred_id LIKE 'milestone_%' THEN 1 ELSE 2 END,
+        reward_coins DESC
     `, [userId]);
 
-    const stats = statsResult.rows[0] || { total_invites: 0, total_earned: 0, pending_count: 0 };
+    const stats = statsResult.rows[0] || { total_earned: 0, pending_count: 0 };
     
     res.json({
       success: true,
       friends: friendsResult.rows,
-      total_invites: parseInt(stats.total_invites) || 0,
+      total_invites: milestoneCheck.totalFriends, // 🆕 ИСПОЛЬЗУЕМ ПРАВИЛЬНЫЙ ПОДСЧЕТ
       total_earned: parseInt(stats.total_earned) || 0,
       pending_rewards: pendingRewards.rows,
-      referral_link: `ref_${userId}`
+      referral_link: `ref_${userId}`,
+      // 🆕 НОВЫЕ ПОЛЯ
+      milestone_info: {
+        new_milestones: milestoneCheck.newMilestones,
+        next_milestone: milestoneCheck.nextMilestone
+      }
     });
 
   } catch (err) {
@@ -181,7 +283,7 @@ app.get('/api/friends', async (req, res) => {
   }
 });
 
-// POST /api/friends/claim - получение наград за рефералы
+// 🆕 ОБНОВЛЕННЫЙ POST /api/friends/claim - получение наград за рефералы
 app.post('/api/friends/claim', async (req, res) => {
   const { userId } = req.body;
   console.log('🎁 Claiming referral rewards for:', userId);
@@ -189,7 +291,7 @@ app.post('/api/friends/claim', async (req, res) => {
   try {
     // Получаем все неполученные награды
     const pendingRewards = await pool.query(`
-      SELECT id, reward_coins
+      SELECT id, reward_coins, referred_id, referred_name
       FROM user_referrals
       WHERE referrer_id = $1 AND claimed = FALSE
     `, [userId]);
@@ -204,7 +306,10 @@ app.post('/api/friends/claim', async (req, res) => {
 
     // Считаем общую сумму
     const totalCoins = pendingRewards.rows.reduce((sum, reward) => sum + reward.reward_coins, 0);
-
+    
+    // Проверяем есть ли награды с машиной
+    const carRewards = pendingRewards.rows.filter(r => r.referred_id === 'milestone_50');
+    
     // Начинаем транзакцию
     await pool.query('BEGIN');
 
@@ -217,20 +322,67 @@ app.post('/api/friends/claim', async (req, res) => {
       `, [userId]);
 
       // Добавляем монеты пользователю
-      await pool.query(`
-        UPDATE users 
-        SET game_coins = game_coins + $1, updated_at = CURRENT_TIMESTAMP
-        WHERE user_id = $2
-      `, [totalCoins, userId]);
+      if (totalCoins > 0) {
+        await pool.query(`
+          UPDATE users 
+          SET game_coins = game_coins + $1, updated_at = CURRENT_TIMESTAMP
+          WHERE user_id = $2
+        `, [totalCoins, userId]);
+      }
+
+      // 🆕 ДОБАВЛЯЕМ МАШИНУ ЗА 50 ДРУЗЕЙ
+      if (carRewards.length > 0) {
+        const car077 = {
+          id: 'car_077',
+          name: 'Легендарная машина рефера',
+          imageUrl: '/cars/car_077.png',
+          stats: { power: 150, speed: 180, style: 70, reliability: 80 },
+          parts: {
+            engine: { level: 10, name: 'Двигатель' },
+            tires: { level: 10, name: 'Шины' },
+            style_body: { level: 10, name: 'Кузов (Стиль)' },
+            reliability_base: { level: 10, name: 'Надежность (База)' }
+          }
+        };
+
+        // Получаем текущие машины
+        const userCars = await pool.query(`
+          SELECT player_cars FROM users WHERE user_id = $1
+        `, [userId]);
+
+        let currentCars = [];
+        if (userCars.rows.length > 0 && userCars.rows[0].player_cars) {
+          currentCars = userCars.rows[0].player_cars;
+        }
+
+        // Проверяем что машины еще нет
+        const hasLegendaryCar = currentCars.some(car => car.id === 'car_077');
+        
+        if (!hasLegendaryCar) {
+          currentCars.push(car077);
+          
+          await pool.query(`
+            UPDATE users 
+            SET player_cars = $1, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = $2
+          `, [JSON.stringify(currentCars), userId]);
+          
+          console.log(`🚗 Added legendary car to user ${userId}`);
+        }
+      }
 
       await pool.query('COMMIT');
 
-      console.log(`✅ Claimed ${totalCoins} coins for ${userId}`);
+      console.log(`✅ Claimed ${totalCoins} coins and ${carRewards.length} cars for ${userId}`);
 
       res.json({
         success: true,
         total_coins: totalCoins,
-        rewards_count: pendingRewards.rows.length
+        rewards_count: pendingRewards.rows.length,
+        car_received: carRewards.length > 0,
+        message: carRewards.length > 0 ? 
+          `Получено ${totalCoins} монет и легендарная машина!` : 
+          `Получено ${totalCoins} монет!`
       });
 
     } catch (err) {
@@ -622,7 +774,7 @@ initializeDatabase()
     const server = app.listen(port, () => {
       console.log(`🚀 Server running on port ${port}`);
       console.log(`⛽ Fuel system enabled (max: 5, refill: 1 hour)`);
-      console.log(`👥 Friends system enabled`);
+      console.log(`👥 Friends system enabled with milestone rewards`);
       console.log(`📺 Adsgram integration enabled`);
       console.log(`⚔️ PvP system enabled`);
       console.log(`🔔 Notifications system enabled`);

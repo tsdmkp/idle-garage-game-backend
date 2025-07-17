@@ -2,7 +2,6 @@
 
 // === PvP СИСТЕМА - КОНСТАНТЫ ===
 
-
 const LEAGUES = {
   BRONZE: { 
     name: 'Бронзовая лига', 
@@ -41,9 +40,6 @@ const LEAGUES = {
     color: '#e5e4e2'
   }
 };
-
-
-
 
 const LEAGUE_POINTS = {
   win: 10,
@@ -88,10 +84,44 @@ const REWARDS = {
   ADSGRAM_SHOP_HELP: 200
 };
 
+// === MILESTONE НАГРАДЫ ЗА РЕФЕРАЛОВ ===
+const REFERRAL_MILESTONES = {
+  5: {
+    reward_coins: 6000,
+    reward_type: 'coins',
+    title: 'Награда за 5 друзей',
+    description: 'Получено за приглашение 5 друзей'
+  },
+  10: {
+    reward_coins: 15000,
+    reward_type: 'coins',
+    title: 'Награда за 10 друзей',
+    description: 'Получено за приглашение 10 друзей'
+  },
+  25: {
+    reward_coins: 40000,
+    reward_type: 'coins',
+    title: 'Награда за 25 друзей',
+    description: 'Получено за приглашение 25 друзей'
+  },
+  50: {
+    reward_coins: 0,
+    reward_type: 'car',
+    reward_data: {
+      car_id: 'car_077',
+      car_name: 'Легендарная машина рефера',
+      car_stats: { power: 150, speed: 180, style: 70, reliability: 80 }
+    },
+    title: 'Легендарная машина!',
+    description: 'Получено за приглашение 50 друзей'
+  }
+};
+
 module.exports = {
   LEAGUES,
   LEAGUE_POINTS,
   BASE_CAR_STATS,
   GAME_LIMITS,
-  REWARDS
+  REWARDS,
+  REFERRAL_MILESTONES
 };
