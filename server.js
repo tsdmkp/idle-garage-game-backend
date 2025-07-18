@@ -209,16 +209,13 @@ app.get('/leaderboard', async (req, res) => {
   return app._router.handle(req, res);
 });
 
-// 🆕 ОБНОВЛЕННЫЙ GET /api/friends - получение данных о друзьях
+// 🆕 ИСПРАВЛЕННЫЙ GET /api/friends
 app.get('/api/friends', async (req, res) => {
   const userId = req.query.userId || 'default';
   console.log('👥 Friends data request for:', userId);
 
   try {
-    // 🆕 ДОБАВЛЯЕМ ПРОВЕРКУ MILESTONE НАГРАД
-    const milestoneCheck = await checkAndCreateMilestoneRewards(userId);
-    
-    // Получаем список приглашенных друзей (только реальных) с аватарками
+    // Получаем реальных друзей
     const friendsResult = await pool.query(`
       SELECT 
         ur.referred_id as user_id,
@@ -234,170 +231,97 @@ app.get('/api/friends', async (req, res) => {
       ORDER BY ur.created_at DESC
     `, [userId]);
 
-    // Считаем статистику (включая milestone)
+    const realFriendsCount = friendsResult.rows.length;
+    console.log(`👥 Real friends count: ${realFriendsCount}`);
+
+    // Проверяем существующие milestone
+    const existingMilestones = await pool.query(`
+      SELECT referred_id FROM user_referrals 
+      WHERE referrer_id = $1 AND referred_id LIKE 'milestone_%'
+    `, [userId]);
+    
+    const existingIds = existingMilestones.rows.map(row => 
+      parseInt(row.referred_id.replace('milestone_', ''))
+    );
+    console.log('📋 Existing milestones:', existingIds);
+
+    // Создаем milestone за 5 друзей если его нет
+    if (realFriendsCount >= 5 && !existingIds.includes(5)) {
+      console.log('🎁 Creating milestone_5...');
+      await pool.query(`
+        INSERT INTO user_referrals (referrer_id, referred_id, referred_name, reward_coins, claimed)
+        VALUES ($1, 'milestone_5', 'Награда за 5 друзей', 6000, false)
+      `, [userId]);
+      console.log('✅ milestone_5 created!');
+    }
+
+    // Создаем milestone за 10 друзей если его нет
+    if (realFriendsCount >= 10 && !existingIds.includes(10)) {
+      console.log('🎁 Creating milestone_10...');
+      await pool.query(`
+        INSERT INTO user_referrals (referrer_id, referred_id, referred_name, reward_coins, claimed)
+        VALUES ($1, 'milestone_10', 'Награда за 10 друзей', 15000, false)
+      `, [userId]);
+      console.log('✅ milestone_10 created!');
+    }
+
+    // И так далее для 25 и 50...
+    if (realFriendsCount >= 25 && !existingIds.includes(25)) {
+      await pool.query(`
+        INSERT INTO user_referrals (referrer_id, referred_id, referred_name, reward_coins, claimed)
+        VALUES ($1, 'milestone_25', 'Награда за 25 друзей', 40000, false)
+      `, [userId]);
+      console.log('✅ milestone_25 created!');
+    }
+
+    if (realFriendsCount >= 50 && !existingIds.includes(50)) {
+      await pool.query(`
+        INSERT INTO user_referrals (referrer_id, referred_id, referred_name, reward_coins, claimed)
+        VALUES ($1, 'milestone_50', 'Легендарная машина!', 0, false)
+      `, [userId]);
+      console.log('✅ milestone_50 created!');
+    }
+
+    // Получаем статистику
     const statsResult = await pool.query(`
       SELECT 
         SUM(CASE WHEN claimed THEN reward_coins ELSE 0 END) as total_earned,
         COUNT(CASE WHEN NOT claimed THEN 1 END) as pending_count
-      FROM user_referrals
-      WHERE referrer_id = $1
+      FROM user_referrals WHERE referrer_id = $1
     `, [userId]);
 
-    // Получаем неполученные награды (включая milestone)
+    // Получаем pending rewards
     const pendingRewards = await pool.query(`
       SELECT 
         referred_name as friend_name, 
         reward_coins as coins,
         referred_id,
-        CASE 
-          WHEN referred_id LIKE 'milestone_%' THEN 'milestone'
-          ELSE 'referral'
-        END as reward_type
+        CASE WHEN referred_id LIKE 'milestone_%' THEN 'milestone' ELSE 'referral' END as reward_type
       FROM user_referrals
       WHERE referrer_id = $1 AND claimed = FALSE
-      ORDER BY 
-        CASE WHEN referred_id LIKE 'milestone_%' THEN 1 ELSE 2 END,
-        reward_coins DESC
+      ORDER BY reward_coins DESC
     `, [userId]);
 
     const stats = statsResult.rows[0] || { total_earned: 0, pending_count: 0 };
     
+    console.log(`📤 Returning ${pendingRewards.rows.length} pending rewards`);
+
     res.json({
       success: true,
       friends: friendsResult.rows,
-      total_invites: friendsResult.rows.length, // 🔧 ИСПРАВЛЕНО: используем реальный подсчет из JOIN
+      total_invites: realFriendsCount,
       total_earned: parseInt(stats.total_earned) || 0,
       pending_rewards: pendingRewards.rows,
       referral_link: `ref_${userId}`,
-      // 🆕 НОВЫЕ ПОЛЯ
       milestone_info: {
-        new_milestones: milestoneCheck.newMilestones,
-        next_milestone: milestoneCheck.nextMilestone
+        new_milestones: [],
+        next_milestone: null
       }
     });
 
   } catch (err) {
-    console.error('❌ Error fetching friends data:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to fetch friends data'
-    });
-  }
-});
-
-// 🆕 ОБНОВЛЕННЫЙ POST /api/friends/claim - получение наград за рефералы
-app.post('/api/friends/claim', async (req, res) => {
-  const { userId } = req.body;
-  console.log('🎁 Claiming referral rewards for:', userId);
-
-  try {
-    // Получаем все неполученные награды
-    const pendingRewards = await pool.query(`
-      SELECT id, reward_coins, referred_id, referred_name
-      FROM user_referrals
-      WHERE referrer_id = $1 AND claimed = FALSE
-    `, [userId]);
-
-    if (pendingRewards.rows.length === 0) {
-      return res.json({
-        success: true,
-        message: 'No pending rewards',
-        total_coins: 0
-      });
-    }
-
-    // Считаем общую сумму
-    const totalCoins = pendingRewards.rows.reduce((sum, reward) => sum + reward.reward_coins, 0);
-    
-    // Проверяем есть ли награды с машиной
-    const carRewards = pendingRewards.rows.filter(r => r.referred_id === 'milestone_50');
-    
-    // Начинаем транзакцию
-    await pool.query('BEGIN');
-
-    try {
-      // Отмечаем награды как полученные
-      await pool.query(`
-        UPDATE user_referrals 
-        SET claimed = TRUE 
-        WHERE referrer_id = $1 AND claimed = FALSE
-      `, [userId]);
-
-      // Добавляем монеты пользователю
-      if (totalCoins > 0) {
-        await pool.query(`
-          UPDATE users 
-          SET game_coins = game_coins + $1, updated_at = CURRENT_TIMESTAMP
-          WHERE user_id = $2
-        `, [totalCoins, userId]);
-      }
-
-      // 🆕 ДОБАВЛЯЕМ МАШИНУ ЗА 50 ДРУЗЕЙ
-      if (carRewards.length > 0) {
-        const car077 = {
-          id: 'car_077',
-          name: 'Легендарная машина рефера',
-          imageUrl: '/cars/car_077.png',
-          stats: { power: 150, speed: 180, style: 70, reliability: 80 },
-          parts: {
-            engine: { level: 10, name: 'Двигатель' },
-            tires: { level: 10, name: 'Шины' },
-            style_body: { level: 10, name: 'Кузов (Стиль)' },
-            reliability_base: { level: 10, name: 'Надежность (База)' }
-          }
-        };
-
-        // Получаем текущие машины
-        const userCars = await pool.query(`
-          SELECT player_cars FROM users WHERE user_id = $1
-        `, [userId]);
-
-        let currentCars = [];
-        if (userCars.rows.length > 0 && userCars.rows[0].player_cars) {
-          currentCars = userCars.rows[0].player_cars;
-        }
-
-        // Проверяем что машины еще нет
-        const hasLegendaryCar = currentCars.some(car => car.id === 'car_077');
-        
-        if (!hasLegendaryCar) {
-          currentCars.push(car077);
-          
-          await pool.query(`
-            UPDATE users 
-            SET player_cars = $1, updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = $2
-          `, [JSON.stringify(currentCars), userId]);
-          
-          console.log(`🚗 Added legendary car to user ${userId}`);
-        }
-      }
-
-      await pool.query('COMMIT');
-
-      console.log(`✅ Claimed ${totalCoins} coins and ${carRewards.length} cars for ${userId}`);
-
-      res.json({
-        success: true,
-        total_coins: totalCoins,
-        rewards_count: pendingRewards.rows.length,
-        car_received: carRewards.length > 0,
-        message: carRewards.length > 0 ? 
-          `Получено ${totalCoins} монет и легендарная машина!` : 
-          `Получено ${totalCoins} монет!`
-      });
-
-    } catch (err) {
-      await pool.query('ROLLBACK');
-      throw err;
-    }
-
-  } catch (err) {
-    console.error('❌ Error claiming referral rewards:', err);
-    res.status(500).json({
-      success: false,
-      error: 'Failed to claim rewards'
-    });
+    console.error('❌ Error:', err);
+    res.status(500).json({ success: false, error: 'Failed to fetch friends data' });
   }
 });
 
