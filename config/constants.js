@@ -56,6 +56,12 @@ const BASE_CAR_STATS = {
   'car_004': { power: 90, speed: 125, style: 20, reliability: 50 },
   'car_005': { power: 110, speed: 140, style: 30, reliability: 55 },
   'car_006': { power: 130, speed: 160, style: 40, reliability: 60 },
+  'car_007': { power: 145, speed: 175, style: 48, reliability: 65 },
+  'car_008': { power: 160, speed: 195, style: 55, reliability: 70 },
+  'car_009': { power: 180, speed: 215, style: 65, reliability: 75 },
+  'car_010': { power: 200, speed: 240, style: 75, reliability: 80 },
+
+
   'car_077': { power: 150, speed: 180, style: 70, reliability: 80 }
 
 };
