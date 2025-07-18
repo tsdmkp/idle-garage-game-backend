@@ -218,16 +218,17 @@ app.get('/api/friends', async (req, res) => {
     // 🆕 ДОБАВЛЯЕМ ПРОВЕРКУ MILESTONE НАГРАД
     const milestoneCheck = await checkAndCreateMilestoneRewards(userId);
     
-    // Получаем список приглашенных друзей (только реальных)
+    // Получаем список приглашенных друзей (только реальных) с аватарками
     const friendsResult = await pool.query(`
       SELECT 
         ur.referred_id as user_id,
         ur.referred_name as first_name,
-        u.player_photo as photo_url
         ur.reward_coins,
         ur.claimed,
-        ur.created_at as joined_at
+        ur.created_at as joined_at,
+        u.player_photo as photo_url
       FROM user_referrals ur
+      LEFT JOIN users u ON ur.referred_id = u.user_id
       WHERE ur.referrer_id = $1
       AND ur.referred_id NOT LIKE 'milestone_%'
       ORDER BY ur.created_at DESC
