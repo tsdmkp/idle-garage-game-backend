@@ -223,6 +223,7 @@ app.get('/api/friends', async (req, res) => {
       SELECT 
         ur.referred_id as user_id,
         ur.referred_name as first_name,
+        u.player_photo as photo_url
         ur.reward_coins,
         ur.claimed,
         ur.created_at as joined_at
