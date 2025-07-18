@@ -121,6 +121,7 @@ app.use('/api/notifications', notificationRoutes);
 
 // Функция проверки milestone наград
 const checkAndCreateMilestoneRewards = async (userId) => {
+  console.log('🎁 checkAndCreateMilestoneRewards called with userId:', userId);
   try {
     // Считаем реальных друзей (не milestone записи)
     const friendsCount = await pool.query(`
@@ -131,7 +132,7 @@ const checkAndCreateMilestoneRewards = async (userId) => {
     `, [userId]);
     
     const totalFriends = parseInt(friendsCount.rows[0]?.count || 0);
-    
+    console.log('🔢 totalFriends found:', totalFriends);
     // Проверяем какие milestone уже получены
     const existingMilestones = await pool.query(`
       SELECT referred_id
@@ -143,7 +144,7 @@ const checkAndCreateMilestoneRewards = async (userId) => {
     const claimedMilestones = existingMilestones.rows.map(row => 
       parseInt(row.referred_id.replace('milestone_', ''))
     );
-    
+     console.log('📋 claimedMilestones:', claimedMilestones);
     // Создаем недостающие milestone награды
     const newMilestones = [];
     
