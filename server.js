@@ -786,6 +786,9 @@ initializeDatabase()
       console.log(`📺 Adsgram endpoints: /api/adsgram/*`);
       console.log(`🏥 Health check: /api/health`);
       console.log(`📊 Admin stats: /api/admin/stats`);
+      console.log('🎁 checkAndCreateMilestoneRewards called with userId:', userId);
+      console.log('🔢 totalFriends found:', totalFriends);
+      console.log('📋 claimedMilestones:', claimedMilestones);
     });
     
     // Обработка ошибки занятого порта
