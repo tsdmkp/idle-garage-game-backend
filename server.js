@@ -325,6 +325,132 @@ app.get('/api/friends', async (req, res) => {
   }
 });
 
+// 🎁 POST /api/friends/claim - получение наград за рефералы
+app.post('/api/friends/claim', async (req, res) => {
+  const { userId } = req.body;
+  console.log('🎁 Claiming referral rewards for:', userId);
+
+  try {
+    // Получаем все неполученные награды
+    const pendingRewards = await pool.query(`
+      SELECT id, reward_coins, referred_id, referred_name
+      FROM user_referrals
+      WHERE referrer_id = $1 AND claimed = FALSE
+    `, [userId]);
+
+    if (pendingRewards.rows.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No pending rewards',
+        total_coins: 0
+      });
+    }
+
+    console.log('🎁 Found pending rewards:', pendingRewards.rows.length);
+
+    // Считаем общую сумму монет
+    const totalCoins = pendingRewards.rows.reduce((sum, reward) => sum + reward.reward_coins, 0);
+    
+    // Проверяем есть ли машина (milestone_50)
+    const carRewards = pendingRewards.rows.filter(r => r.referred_id === 'milestone_50');
+    
+    console.log('💰 Total coins to give:', totalCoins);
+    console.log('🚗 Car rewards found:', carRewards.length);
+
+    // Начинаем транзакцию
+    await pool.query('BEGIN');
+
+    try {
+      // Отмечаем награды как полученные
+      await pool.query(`
+        UPDATE user_referrals 
+        SET claimed = TRUE 
+        WHERE referrer_id = $1 AND claimed = FALSE
+      `, [userId]);
+
+      // Добавляем монеты пользователю
+      if (totalCoins > 0) {
+        await pool.query(`
+          UPDATE users 
+          SET game_coins = game_coins + $1, updated_at = CURRENT_TIMESTAMP
+          WHERE user_id = $2
+        `, [totalCoins, userId]);
+        
+        console.log(`💰 Added ${totalCoins} coins to user ${userId}`);
+      }
+
+      // Добавляем машину если milestone_50
+      if (carRewards.length > 0) {
+        console.log('🚗 Adding legendary car...');
+        
+        const car077 = {
+          id: 'car_077',
+          name: 'Легендарная машина рефера',
+          imageUrl: '/cars/car_077.png',
+          stats: { power: 150, speed: 180, style: 70, reliability: 80 },
+          parts: {
+            engine: { level: 10, name: 'Двигатель' },
+            tires: { level: 10, name: 'Шины' },
+            style_body: { level: 10, name: 'Кузов (Стиль)' },
+            reliability_base: { level: 10, name: 'Надежность (База)' }
+          }
+        };
+
+        // Получаем текущие машины
+        const userCars = await pool.query(`
+          SELECT player_cars FROM users WHERE user_id = $1
+        `, [userId]);
+
+        let currentCars = [];
+        if (userCars.rows.length > 0 && userCars.rows[0].player_cars) {
+          currentCars = userCars.rows[0].player_cars;
+        }
+
+        // Проверяем что машины еще нет
+        const hasLegendaryCar = currentCars.some(car => car.id === 'car_077');
+        
+        if (!hasLegendaryCar) {
+          currentCars.push(car077);
+          
+          await pool.query(`
+            UPDATE users 
+            SET player_cars = $1, updated_at = CURRENT_TIMESTAMP
+            WHERE user_id = $2
+          `, [JSON.stringify(currentCars), userId]);
+          
+          console.log(`🚗 ✅ Added legendary car to user ${userId}`);
+        }
+      }
+
+      await pool.query('COMMIT');
+
+      console.log(`✅ Successfully claimed rewards for ${userId}`);
+
+      res.json({
+        success: true,
+        total_coins: totalCoins,
+        rewards_count: pendingRewards.rows.length,
+        car_received: carRewards.length > 0,
+        message: carRewards.length > 0 ? 
+          `Получено ${totalCoins} монет и легендарная машина!` : 
+          `Получено ${totalCoins} монет!`
+      });
+
+    } catch (err) {
+      await pool.query('ROLLBACK');
+      throw err;
+    }
+
+  } catch (err) {
+    console.error('❌ Error claiming referral rewards:', err);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to claim rewards'
+    });
+  }
+});
+
+
 // Основной эндпоинт для валидации наград от Adsgram
 app.get('/api/adsgram/reward', async (req, res) => {
   try {
