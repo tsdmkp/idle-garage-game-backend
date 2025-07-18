@@ -55,7 +55,9 @@ const BASE_CAR_STATS = {
   'car_003': { power: 75, speed: 110, style: 15, reliability: 45 },
   'car_004': { power: 90, speed: 125, style: 20, reliability: 50 },
   'car_005': { power: 110, speed: 140, style: 30, reliability: 55 },
-  'car_006': { power: 130, speed: 160, style: 40, reliability: 60 }
+  'car_006': { power: 130, speed: 160, style: 40, reliability: 60 },
+  'car_077': { power: 150, speed: 180, style: 70, reliability: 80 }
+
 };
 
 // === ИГРОВЫЕ ЛИМИТЫ ===
